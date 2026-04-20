@@ -31,6 +31,9 @@ export function useBilling() {
     return editsThisMonth < FREE_LIMIT;
   }, [plan, editsThisMonth]);
 
+  // SECURITY TODO: before production, replace this with a server function that
+  // validates payment (Stripe webhook) before writing the plan field.
+  // Direct client writes are only safe for demos / internal test accounts.
   const upgradePlan = useCallback(
     async (next: Plan) => {
       if (!user) return;

@@ -20,6 +20,14 @@ dist-ssr
 .wrangler/
 .dev.vars
 
+# Environment secrets — never commit the real .env
+.env
+.env.local
+.env.*.local
+
+# npm lock (project uses Bun)
+package-lock.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -51,28 +51,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let initialized = false;
+
     // 1. Subscribe FIRST (avoid losing initial event)
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session: Session | null) => {
       setUser(session?.user ?? null);
       if (session?.user) {
-        // defer to avoid blocking the listener
-        setTimeout(() => {
-          fetchProfile(session.user.id).then(setProfile);
-        }, 0);
+        fetchProfile(session.user.id).then((p) => {
+          setProfile(p);
+          if (!initialized) { initialized = true; setLoading(false); }
+        });
       } else {
         setProfile(null);
+        if (!initialized) { initialized = true; setLoading(false); }
       }
     });
 
-    // 2. Then fetch existing session
+    // 2. Then fetch existing session (handles the case where listener doesn't fire)
     supabase.auth.getSession().then(({ data }) => {
+      if (initialized) return;
       setUser(data.session?.user ?? null);
       if (data.session?.user) {
         fetchProfile(data.session.user.id).then((p) => {
           setProfile(p);
+          initialized = true;
           setLoading(false);
         });
       } else {
+        initialized = true;
         setLoading(false);
       }
     });
