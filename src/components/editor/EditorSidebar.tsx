@@ -4,6 +4,7 @@ import { Upload, FileText, LogOut, Trash2 } from "lucide-react";
 import { Logo } from "@/components/ui/Logo";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/cn";
@@ -76,14 +77,17 @@ export function EditorSidebar({
     <aside className="w-[260px] shrink-0 h-screen flex flex-col bg-surface-1 border-r-hairline">
       <div className="px-4 h-14 flex items-center justify-between border-b-hairline">
         <Logo size="sm" />
-        {isAdmin && (
-          <button
-            onClick={() => navigate({ to: "/admin" })}
-            className="text-[10px] uppercase tracking-wider text-muted-foreground hover:text-primary transition-colors"
-          >
-            Admin
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {isAdmin && (
+            <button
+              onClick={() => navigate({ to: "/admin" })}
+              className="text-[10px] uppercase tracking-wider text-muted-foreground hover:text-primary transition-colors"
+            >
+              Admin
+            </button>
+          )}
+          <ThemeToggle />
+        </div>
       </div>
 
       <div className="p-4">
