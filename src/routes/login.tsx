@@ -54,10 +54,11 @@ function LoginPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
-      <div className="px-6 py-5">
+      <div className="px-6 py-5 flex items-center justify-between">
         <Link to="/" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
           <ArrowLeft className="h-4 w-4" /> Voltar
         </Link>
+        <ThemeToggle />
       </div>
 
       <div className="flex-1 flex items-center justify-center px-4">
