@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { AuthProvider } from "@/hooks/useAuth";
+import { ThemeProvider } from "@/hooks/useTheme";
 import { ToastProvider } from "@/components/ui/Toast";
 
 import appCss from "../styles.css?url";
@@ -82,11 +83,13 @@ function RootComponent() {
   const [queryClient] = useState(() => new QueryClient());
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <ToastProvider>
-          <Outlet />
-        </ToastProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <ToastProvider>
+            <Outlet />
+          </ToastProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

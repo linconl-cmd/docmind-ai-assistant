@@ -57,22 +57,54 @@
 }
 
 :root {
-  /* Surfaces */
+  /* ===== LIGHT THEME (default) ===== */
+  --background: oklch(0.99 0.003 280);
+  --foreground: oklch(0.18 0.015 280);
+  --surface-1: oklch(0.97 0.005 280);
+  --surface-2: oklch(0.94 0.008 280);
+  --surface-3: oklch(0.90 0.012 280);
+
+  --border: oklch(0.84 0.012 280 / 0.9);
+  --border-strong: oklch(0.72 0.018 280 / 0.9);
+
+  --muted: oklch(0.94 0.008 280);
+  --muted-foreground: oklch(0.45 0.020 270);
+
+  --primary: oklch(0.58 0.22 285);
+  --primary-foreground: oklch(0.99 0.005 270);
+  --primary-soft: oklch(0.65 0.20 285 / 0.18);
+
+  --accent: oklch(0.92 0.030 285);
+  --accent-foreground: oklch(0.25 0.05 285);
+
+  --success: oklch(0.55 0.18 155);
+  --warning: oklch(0.68 0.18 75);
+  --danger: oklch(0.58 0.22 25);
+
+  --plan-free: oklch(0.55 0.02 270);
+  --plan-ppu: oklch(0.62 0.18 75);
+  --plan-pro: oklch(0.58 0.22 285);
+  --plan-biz: oklch(0.55 0.18 235);
+
+  --ring: oklch(0.58 0.22 285 / 0.5);
+
+  --radius: 10px;
+}
+
+.dark {
+  /* ===== DARK THEME ===== */
   --background: oklch(0.13 0.015 280);          /* #08080e */
   --foreground: oklch(0.96 0.005 270);
   --surface-1: oklch(0.16 0.015 280);           /* #111118 */
   --surface-2: oklch(0.20 0.020 280);           /* #1a1a28 */
   --surface-3: oklch(0.24 0.025 280);
 
-  /* Borders — finas */
   --border: oklch(0.28 0.020 280 / 0.6);
   --border-strong: oklch(0.40 0.030 280 / 0.8);
 
-  /* Muted */
   --muted: oklch(0.22 0.018 280);
   --muted-foreground: oklch(0.65 0.020 270);
 
-  /* Primary — violeta #7c6dff */
   --primary: oklch(0.65 0.20 285);
   --primary-foreground: oklch(0.98 0.005 270);
   --primary-soft: oklch(0.30 0.10 285 / 0.25);
@@ -80,20 +112,16 @@
   --accent: oklch(0.30 0.05 285);
   --accent-foreground: oklch(0.96 0.005 270);
 
-  /* Status */
   --success: oklch(0.70 0.18 155);
   --warning: oklch(0.78 0.16 75);
   --danger: oklch(0.65 0.22 25);
 
-  /* Plans */
   --plan-free: oklch(0.55 0.02 270);
   --plan-ppu: oklch(0.72 0.16 75);
   --plan-pro: oklch(0.65 0.20 285);
   --plan-biz: oklch(0.65 0.18 235);
 
   --ring: oklch(0.65 0.20 285 / 0.6);
-
-  --radius: 10px;
 }
 
 @layer base {
