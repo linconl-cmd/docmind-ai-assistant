@@ -66,9 +66,12 @@ export const Route = createRootRoute({
 });
 
 function RootShell({ children }: { children: React.ReactNode }) {
+  // Inline script: applies the saved theme class BEFORE hydration to avoid a flash.
+  const themeBootstrap = `(function(){try{var t=localStorage.getItem('docmind-theme');if(t!=='light'&&t!=='dark')t='dark';var r=document.documentElement;if(t==='dark')r.classList.add('dark');else r.classList.remove('dark');r.style.colorScheme=t;}catch(e){document.documentElement.classList.add('dark');}})();`;
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" className="dark" style={{ colorScheme: "dark" }}>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
         <HeadContent />
       </head>
       <body>
