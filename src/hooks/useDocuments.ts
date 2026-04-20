@@ -74,6 +74,24 @@ export function useDocuments() {
 
   const selectDocument = useCallback((id: string) => setSelectedId(id), []);
 
+  const deleteDocument = useCallback(
+    async (id: string) => {
+      // Sample doc cannot be deleted (it's a local demo)
+      if (id === SAMPLE_DOCUMENT.id) {
+        throw new Error("O documento de exemplo não pode ser apagado.");
+      }
+      const { error } = await supabase.from("documents").delete().eq("id", id);
+      if (error) throw error;
+      setDocuments((docs) => docs.filter((d) => d.id !== id));
+      setSelectedId((curr) => {
+        if (curr !== id) return curr;
+        // fall back to sample doc
+        return SAMPLE_DOCUMENT.id;
+      });
+    },
+    [],
+  );
+
   const updateDocumentSections = useCallback(
     (docId: string, updater: (doc: AppDocument) => AppDocument) => {
       setDocuments((docs) => docs.map((d) => (d.id === docId ? updater(d) : d)));
@@ -111,6 +129,7 @@ export function useDocuments() {
     selectedDocument,
     selectDocument,
     uploadDocument,
+    deleteDocument,
     updateDocumentSections,
     incrementEditCount,
     refresh,

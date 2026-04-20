@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useRef, useState, type DragEvent } from "react";
-import { Upload, FileText, LogOut } from "lucide-react";
+import { Upload, FileText, LogOut, Trash2 } from "lucide-react";
 import { Logo } from "@/components/ui/Logo";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -15,13 +15,14 @@ interface EditorSidebarProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onUpload: (file: File) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
   onUpgrade: () => void;
   plan: Plan;
   isAdmin: boolean;
 }
 
 export function EditorSidebar({
-  documents, selectedId, onSelect, onUpload, onUpgrade, plan, isAdmin,
+  documents, selectedId, onSelect, onUpload, onDelete, onUpgrade, plan, isAdmin,
 }: EditorSidebarProps) {
   const { profile, signOut } = useAuth();
   const navigate = useNavigate();
@@ -57,6 +58,18 @@ export function EditorSidebar({
   const handleSignOut = async () => {
     await signOut();
     navigate({ to: "/login" });
+  };
+
+  const handleDelete = async (e: React.MouseEvent, doc: AppDocument) => {
+    e.stopPropagation();
+    const ok = window.confirm(`Apagar "${doc.filename}"? Esta ação não pode ser desfeita.`);
+    if (!ok) return;
+    try {
+      await onDelete(doc.id);
+      show("Documento apagado.", "success");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "Erro ao apagar", "error");
+    }
   };
 
   return (
@@ -106,12 +119,21 @@ export function EditorSidebar({
       <div className="flex-1 overflow-y-auto px-2">
         {documents.map((d) => {
           const active = d.id === selectedId;
+          const isSample = d.id === "doc-sample-1";
           return (
-            <button
+            <div
               key={d.id}
               onClick={() => onSelect(d.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(d.id);
+                }
+              }}
               className={cn(
-                "w-full text-left p-2.5 rounded-md mb-1 transition-all group",
+                "w-full text-left p-2.5 rounded-md mb-1 transition-all group cursor-pointer relative",
                 active ? "bg-primary/10" : "hover:bg-surface-2",
               )}
               style={active ? { borderWidth: "0.5px", borderStyle: "solid", borderColor: "rgb(124 109 255 / 0.5)" } : undefined}
@@ -119,16 +141,29 @@ export function EditorSidebar({
               <div className="flex items-start gap-2">
                 <FileText className={cn("h-3.5 w-3.5 mt-0.5 shrink-0", active ? "text-primary" : "text-muted-foreground")} />
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium truncate">{d.filename}</p>
+                  <p className="text-xs font-medium truncate pr-5">{d.filename}</p>
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-[10px] text-muted-foreground">{d.pages} pág.</span>
                     {d.edit_count > 0 && (
                       <span className="text-[10px] text-primary">· {d.edit_count} edição{d.edit_count > 1 ? "s" : ""}</span>
                     )}
+                    {isSample && (
+                      <span className="text-[10px] text-muted-foreground">· exemplo</span>
+                    )}
                   </div>
                 </div>
+                {!isSample && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleDelete(e, d)}
+                    aria-label={`Apagar ${d.filename}`}
+                    className="absolute top-2 right-2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/15 hover:text-destructive text-muted-foreground transition-all"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
