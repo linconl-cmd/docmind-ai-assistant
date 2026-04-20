@@ -142,6 +142,7 @@ function EditorPage() {
         selectedId={docs.selectedDocument?.id ?? null}
         onSelect={docs.selectDocument}
         onUpload={docs.uploadDocument}
+        onDelete={docs.deleteDocument}
         onUpgrade={() => setUpgradeOpen(true)}
         plan={billing.plan}
         isAdmin={profile?.role === "admin"}
