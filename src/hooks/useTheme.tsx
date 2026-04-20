@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 
 type Theme = "light" | "dark";
 const STORAGE_KEY = "docmind-theme";
+const DEFAULT_THEME: Theme = "dark";
 
 interface ThemeContextValue {
   theme: Theme;
@@ -11,29 +12,32 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-function getInitialTheme(): Theme {
-  if (typeof window === "undefined") return "dark";
+function readStoredTheme(): Theme {
+  if (typeof window === "undefined") return DEFAULT_THEME;
   const stored = window.localStorage.getItem(STORAGE_KEY);
   if (stored === "light" || stored === "dark") return stored;
-  // Default to dark to preserve current DocMind look
-  return "dark";
+  return DEFAULT_THEME;
+}
+
+function applyThemeClass(theme: Theme) {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  root.classList.toggle("dark", theme === "dark");
+  root.style.colorScheme = theme;
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("dark");
+  // Use lazy initializer so the initial render already reflects the stored theme on the client.
+  const [theme, setThemeState] = useState<Theme>(() => {
+    const t = readStoredTheme();
+    // Apply immediately during the first render on the client to avoid a flash.
+    applyThemeClass(t);
+    return t;
+  });
 
-  // Initialize on mount (client-only) to avoid SSR mismatch
+  // Re-apply whenever theme changes (covers SSR -> client hydration too).
   useEffect(() => {
-    const initial = getInitialTheme();
-    setThemeState(initial);
-  }, []);
-
-  // Apply theme class to <html>
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const root = document.documentElement;
-    root.classList.toggle("dark", theme === "dark");
-    root.style.colorScheme = theme;
+    applyThemeClass(theme);
   }, [theme]);
 
   const setTheme = (t: Theme) => {
