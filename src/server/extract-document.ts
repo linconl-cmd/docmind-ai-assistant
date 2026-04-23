@@ -100,7 +100,13 @@ export const extractDocumentFn = createServerFn({ method: "POST" })
         max_tokens: 8192,
         tools: [extractTool],
         tool_choice: { type: "tool", name: "store_document_structure" },
-        system: `Você é um extrator de estruturas de contratos jurídicos brasileiros. Dado um PDF, identifique as seções principais (Partes, Vigência, Valores, Condições, etc.) e extraia campos como pares chave-valor. Use tabelas (kind="table") para listas tabulares. Datas no formato dd/mm/aaaa. Valores em "R$ X.XXX,XX". NUNCA invente dados — extraia apenas o que está literalmente no PDF.`,
+        system: `Você é um extrator de estruturas de documentos brasileiros (contratos, declarações, relatórios, etc.). Dado um PDF:
+
+1. SEMPRE crie uma seção "Cabeçalho" (id="cabecalho", kind="fields") como PRIMEIRA seção, extraindo: título do documento, ano de referência, número/versão, órgão/empresa emissora, e qualquer outro dado de identificação do próprio documento que apareça no topo ou capa.
+2. Depois extraia as demais seções do corpo do documento (Partes, Identificação, Rendimentos, Bens, Valores, Condições, etc.) como seções separadas.
+3. Use kind="table" para conteúdo tabular e kind="fields" para pares chave-valor.
+4. Datas no formato dd/mm/aaaa. Valores em "R$ X.XXX,XX".
+5. NUNCA invente dados — extraia apenas o que está literalmente no PDF.`,
         messages: [
           {
             role: "user",
