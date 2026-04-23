@@ -62,8 +62,8 @@ export function PlanUpgradeModal({ isOpen, onClose, onSelect, currentPlan }: Pla
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Você atingiu o limite do plano Free"
-      description="Continue editando contratos sem interrupção. Escolha o plano que melhor se encaixa."
+      title="Planos pagos em breve"
+      description="Estamos em beta gratuito para validar o produto. Os planos abaixo estarão disponíveis em breve — obrigado pela paciência!"
       size="xl"
     >
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
@@ -95,13 +95,13 @@ export function PlanUpgradeModal({ isOpen, onClose, onSelect, currentPlan }: Pla
               ))}
             </ul>
             <Button
-              variant={p.highlight ? "primary" : "subtle"}
+              variant="subtle"
               fullWidth
               className="mt-5"
               onClick={() => onSelect(p.id)}
-              disabled={currentPlan === p.id}
+              disabled
             >
-              {currentPlan === p.id ? "Plano atual" : p.cta}
+              {currentPlan === p.id ? "Plano atual" : "Em breve"}
             </Button>
           </div>
         ))}

@@ -6,7 +6,7 @@ import type { Plan } from "@/types";
 const FREE_LIMIT = 1;
 
 export function useBilling() {
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile } = useAuth();
   const [editsThisMonth, setEditsThisMonth] = useState(0);
 
   const refreshUsage = useCallback(async () => {
@@ -31,21 +31,11 @@ export function useBilling() {
     return editsThisMonth < FREE_LIMIT;
   }, [plan, editsThisMonth]);
 
-  // SECURITY TODO: before production, replace this with a server function that
-  // validates payment (Stripe webhook) before writing the plan field.
-  // Direct client writes are only safe for demos / internal test accounts.
-  const upgradePlan = useCallback(
-    async (next: Plan) => {
-      if (!user) return;
-      const { error } = await supabase
-        .from("profiles")
-        .update({ plan: next })
-        .eq("id", user.id);
-      if (error) throw error;
-      await refreshProfile();
-    },
-    [user, refreshProfile],
-  );
+  // Billing disabled during beta. Plan upgrades will be re-enabled once the
+  // Stripe webhook + server function for payment validation is implemented.
+  const upgradePlan = useCallback(async (_next: Plan) => {
+    throw new Error("Pagamentos em breve. O beta está liberado no plano Free.");
+  }, []);
 
   const logEdit = useCallback(
     async (params: {

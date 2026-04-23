@@ -215,3 +215,18 @@
 @utility animate-scale-in  { animation: scale-in 0.2s ease-out both; }
 @utility animate-slide-up  { animation: slide-up 0.3s ease-out both; }
 @utility animate-field-flash { animation: field-flash 3s ease-out both; }
+
+/* Interactive elements default to pointer cursor */
+button:not(:disabled),
+a,
+[role="button"]:not([aria-disabled="true"]),
+label[for],
+summary,
+select:not(:disabled),
+[data-slot="trigger"] {
+  cursor: pointer;
+}
+button:disabled,
+[role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
+}

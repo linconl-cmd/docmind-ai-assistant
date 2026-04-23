@@ -147,7 +147,11 @@ function EditorPage() {
         plan={billing.plan}
         isAdmin={profile?.role === "admin"}
       />
-      <PDFViewer doc={docs.selectedDocument} flashedKeys={flashedKeys} />
+      <PDFViewer
+        doc={docs.selectedDocument}
+        flashedKeys={flashedKeys}
+        onSaveSections={docs.saveDocumentSections}
+      />
       <ChatPanel
         messages={chat.messages}
         isTyping={chat.isTyping}

@@ -123,7 +123,6 @@ export function EditorSidebar({
       <div className="flex-1 overflow-y-auto px-2">
         {documents.map((d) => {
           const active = d.id === selectedId;
-          const isSample = d.id === "doc-sample-1";
           return (
             <div
               key={d.id}
@@ -151,21 +150,22 @@ export function EditorSidebar({
                     {d.edit_count > 0 && (
                       <span className="text-[10px] text-primary">· {d.edit_count} edição{d.edit_count > 1 ? "s" : ""}</span>
                     )}
-                    {isSample && (
-                      <span className="text-[10px] text-muted-foreground">· exemplo</span>
+                    {d.status === "extracting" && (
+                      <span className="text-[10px] text-muted-foreground">· processando…</span>
+                    )}
+                    {d.status === "error" && (
+                      <span className="text-[10px] text-destructive">· erro</span>
                     )}
                   </div>
                 </div>
-                {!isSample && (
-                  <button
-                    type="button"
-                    onClick={(e) => handleDelete(e, d)}
-                    aria-label={`Apagar ${d.filename}`}
-                    className="absolute top-2 right-2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/15 hover:text-destructive text-muted-foreground transition-all"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={(e) => handleDelete(e, d)}
+                  aria-label={`Apagar ${d.filename}`}
+                  className="absolute top-2 right-2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/15 hover:text-destructive text-muted-foreground transition-all"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
               </div>
             </div>
           );
