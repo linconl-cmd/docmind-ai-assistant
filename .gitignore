@@ -31,6 +31,12 @@ package-lock.json
 # Claude Code local settings (personal permissions — not shared)
 .claude/settings.local.json
 
+# Supabase temp files
+supabase/.temp/
+
+# Test artifacts
+*.pdf
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
