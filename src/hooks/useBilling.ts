@@ -11,15 +11,19 @@ export function useBilling() {
 
   const refreshUsage = useCallback(async () => {
     if (!user) return;
-    const start = new Date();
-    start.setDate(1);
-    start.setHours(0, 0, 0, 0);
-    const { count } = await supabase
-      .from("usage_logs")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", user.id)
-      .gte("created_at", start.toISOString());
-    setEditsThisMonth(count ?? 0);
+    try {
+      const start = new Date();
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
+      const { count, error } = await supabase
+        .from("usage_logs")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .gte("created_at", start.toISOString());
+      if (!error) setEditsThisMonth(count ?? 0);
+    } catch {
+      // tabela ainda não migrada — ignora silenciosamente
+    }
   }, [user]);
 
   useEffect(() => { refreshUsage(); }, [refreshUsage]);

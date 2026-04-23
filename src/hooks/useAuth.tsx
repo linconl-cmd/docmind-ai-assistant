@@ -22,27 +22,31 @@ export function useAuth() {
 }
 
 async function fetchProfile(userId: string): Promise<Profile | null> {
-  const { data: profileRow } = await supabase
-    .from("profiles")
-    .select("id, email, name, plan, created_at")
-    .eq("id", userId)
-    .maybeSingle();
-  if (!profileRow) return null;
+  try {
+    const { data: profileRow, error } = await supabase
+      .from("profiles")
+      .select("id, email, name, plan, created_at")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error || !profileRow) return null;
 
-  const { data: roleRow } = await supabase
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", userId)
-    .maybeSingle();
+    const { data: roleRow } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", userId)
+      .maybeSingle();
 
-  return {
-    id: profileRow.id,
-    email: profileRow.email,
-    name: profileRow.name ?? "",
-    plan: (profileRow.plan as Plan) ?? "free",
-    role: (roleRow?.role as "user" | "admin") ?? "user",
-    created_at: profileRow.created_at,
-  };
+    return {
+      id: profileRow.id,
+      email: profileRow.email,
+      name: profileRow.name ?? "",
+      plan: (profileRow.plan as Plan) ?? "free",
+      role: (roleRow?.role as "user" | "admin") ?? "user",
+      created_at: profileRow.created_at,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
