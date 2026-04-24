@@ -115,7 +115,53 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
   };
 
   const handleDownload = () => {
-    show("Exportação do PDF editado em breve.", "info");
+    const sections = draft ?? doc?.sections ?? [];
+    const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>${doc?.filename ?? "documento"}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 11pt; color: #111; padding: 24px 32px; }
+    h1 { font-size: 14pt; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 8px; }
+    .section { margin-bottom: 20px; break-inside: avoid; }
+    .section-title { font-size: 11pt; font-weight: bold; background: #f0f0f0; padding: 6px 10px; border-left: 3px solid #333; margin-bottom: 6px; }
+    .field-row { display: grid; grid-template-columns: 180px 1fr; gap: 8px; padding: 4px 10px; border-bottom: 1px solid #e5e5e5; }
+    .field-label { color: #555; font-size: 10pt; }
+    .field-value { font-weight: 500; font-size: 10pt; }
+    table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
+    th { background: #f0f0f0; text-align: left; padding: 5px 8px; border: 1px solid #ccc; font-size: 9pt; }
+    td { padding: 4px 8px; border: 1px solid #ddd; }
+    tr:nth-child(even) td { background: #fafafa; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>
+  <h1>${doc?.filename ?? "Documento"}</h1>
+  ${sections.map((sec) => `
+  <div class="section">
+    <div class="section-title">${sec.title}</div>
+    ${sec.kind === "fields" && sec.fields ? sec.fields.map((f) => `
+      <div class="field-row">
+        <span class="field-label">${f.label}</span>
+        <span class="field-value">${f.value || "—"}</span>
+      </div>`).join("") : ""}
+    ${sec.kind === "table" && sec.table ? `
+      <table>
+        <thead><tr>${sec.table.columns.map((c) => `<th>${c}</th>`).join("")}</tr></thead>
+        <tbody>${sec.table.rows.map((row) => `<tr>${sec.table!.columns.map((c) => `<td>${row[c] ?? ""}</td>`).join("")}</tr>`).join("")}</tbody>
+      </table>` : ""}
+  </div>`).join("")}
+</body>
+</html>`;
+
+    const win = window.open("", "_blank");
+    if (!win) { show("Permita popups para exportar o PDF.", "error"); return; }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 500);
   };
 
   return (
