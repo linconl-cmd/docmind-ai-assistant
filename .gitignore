@@ -37,6 +37,9 @@ supabase/.temp/
 # Test artifacts
 *.pdf
 
+# Secrets temp file (gerado por scripts/upload-secrets.js)
+.secrets.tmp.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

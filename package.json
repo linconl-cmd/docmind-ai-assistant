@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "deploy": "bun run build && wrangler deploy"
+    "deploy": "bun run build && wrangler deploy",
+    "secrets:upload": "node scripts/upload-secrets.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
