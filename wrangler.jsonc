@@ -3,5 +3,9 @@
   "name": "docmind",
   "compatibility_date": "2025-09-24",
   "compatibility_flags": ["nodejs_compat"],
-  "main": "@tanstack/react-start/server-entry"
+  "main": "@tanstack/react-start/server-entry",
+  "vars": {
+    "SUPABASE_URL": "https://ftsrsnkcydpqvwmcyveg.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ0c3JzbmtjeWRwcXZ3bWN5dmVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2OTY0OTAsImV4cCI6MjA5MjI3MjQ5MH0.qZI8IcI5xeO0IU5k2TIDtWo0xNECLXr2QlSGt0n7jyc"
+  }
 }
