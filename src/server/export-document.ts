@@ -30,8 +30,10 @@ function buildValueMap(sections: DocSection[]): Map<string, string> {
   for (const section of sections) {
     if (section.kind === "fields" && section.fields) {
       for (const f of section.fields) {
-        map.set(normalize(f.label), f.value);
-        map.set(normalize(f.key), f.value);
+        if (f.value) {
+          map.set(normalize(f.label), f.value);
+          map.set(normalize(f.key), f.value);
+        }
       }
     }
   }
@@ -40,11 +42,9 @@ function buildValueMap(sections: DocSection[]): Map<string, string> {
 
 function findValue(acroName: string, valueMap: Map<string, string>): string | null {
   const normAcro = normalize(acroName);
-  // exact match
   if (valueMap.has(normAcro)) return valueMap.get(normAcro)!;
-  // partial match: acro name contains field label or vice versa
   for (const [key, val] of valueMap) {
-    if (normAcro.includes(key) || key.includes(normAcro)) return val;
+    if (key.length >= 3 && (normAcro.includes(key) || key.includes(normAcro))) return val;
   }
   return null;
 }
@@ -70,7 +70,6 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
 
     const buf = await file.arrayBuffer();
     const pdfDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
-
     const form = pdfDoc.getForm();
     const fields = form.getFields();
     const hasAcroFields = fields.length > 0;
@@ -84,34 +83,41 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
         const value = findValue(name, valueMap);
         if (!value) continue;
 
+        // TextField
         try {
-          const type = field.constructor.name;
-          if (type === "PDFTextField") {
-            (field as import("pdf-lib").PDFTextField).setText(value);
+          const tf = form.getTextField(name);
+          tf.setText(value);
+          filledCount++;
+          continue;
+        } catch { /* not a text field */ }
+
+        // CheckBox
+        try {
+          const cb = form.getCheckBox(name);
+          const v = value.toLowerCase();
+          if (v === "sim" || v === "true" || v === "x" || v === "1") {
+            cb.check();
             filledCount++;
-          } else if (type === "PDFCheckBox") {
-            const lower = value.toLowerCase();
-            if (lower === "sim" || lower === "true" || lower === "x" || lower === "1") {
-              (field as import("pdf-lib").PDFCheckBox).check();
-              filledCount++;
-            }
-          } else if (type === "PDFDropdown") {
-            try {
-              (field as import("pdf-lib").PDFDropdown).select(value);
-              filledCount++;
-            } catch { /* option not available */ }
           }
-        } catch { /* field type mismatch — skip */ }
+          continue;
+        } catch { /* not a checkbox */ }
+
+        // Dropdown
+        try {
+          const dd = form.getDropdown(name);
+          dd.select(value);
+          filledCount++;
+        } catch { /* not a dropdown or option not available */ }
       }
 
-      // Flatten so exported PDF shows values embedded (not as form fields)
       try { form.flatten(); } catch { /* some forms can't be flattened */ }
     }
 
     const pdfBytes = await pdfDoc.save();
-    const binary = Array.from(pdfBytes).map((b) => String.fromCharCode(b)).join("");
+    const binary = Array.from(new Uint8Array(pdfBytes))
+      .map((b) => String.fromCharCode(b))
+      .join("");
     const base64 = btoa(binary);
-
     const exportName = doc.filename.replace(/\.pdf$/i, "") + "_editado.pdf";
 
     return { base64, filename: exportName, hasAcroFields, filledCount };

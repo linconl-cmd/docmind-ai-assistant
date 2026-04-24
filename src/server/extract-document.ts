@@ -100,14 +100,12 @@ export const extractDocumentFn = createServerFn({ method: "POST" })
         max_tokens: 8192,
         tools: [extractTool],
         tool_choice: { type: "tool", name: "store_document_structure" },
-        system: `Você é um extrator de estruturas de documentos brasileiros (contratos, declarações, relatórios, etc.). Dado um PDF:
-
-1. SEMPRE crie uma seção "Cabeçalho" (id="cabecalho", kind="fields") como PRIMEIRA seção. Leia o topo/capa do PDF e extraia os valores REAIS que aparecem lá: título do documento, ano de referência, número/versão, nome do declarante/contribuinte/contratante, CPF/CNPJ, órgão emissor, e quaisquer outros dados de identificação visíveis no cabeçalho.
-2. Depois extraia as demais seções do corpo do documento (Partes, Identificação, Rendimentos, Bens, Valores, Condições, etc.) como seções separadas.
-3. Use kind="table" para conteúdo tabular e kind="fields" para pares chave-valor.
-4. Para CADA campo, preencha o campo "value" com o valor REAL que está escrito no PDF. Se o campo estiver em branco no PDF, use string vazia "". NUNCA deixe campos com valor inventado.
-5. Datas no formato dd/mm/aaaa. Valores em "R$ X.XXX,XX".
-6. NUNCA invente dados — extraia apenas o que está literalmente no PDF.`,
+        system: `Extrator de documentos brasileiros. Regras:
+1. Primeira seção SEMPRE: id="cabecalho", title="Cabeçalho", kind="fields". Extraia do topo do PDF: título, ano, nome, CPF/CNPJ, órgão emissor. Preencha os valores reais do PDF.
+2. Demais seções: extraia as principais (máx 10 seções). Use kind="table" para tabelas, kind="fields" para campos.
+3. Valores: preencha "value" com o que está no PDF. Vazio se não preenchido. Nunca invente.
+4. Seja CONCISO: máx 15 campos por seção de fields, máx 10 linhas por tabela.
+5. Datas: dd/mm/aaaa. Valores: R$ X.XXX,XX.`,
         messages: [
           {
             role: "user",
