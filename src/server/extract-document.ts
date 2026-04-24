@@ -120,12 +120,20 @@ export const extractDocumentFn = createServerFn({ method: "POST" })
       });
 
       const toolBlock = response.content.find((b) => b.type === "tool_use");
-      let sections: DocSection[] = [];
-      let pages = 0;
-      if (toolBlock && toolBlock.type === "tool_use") {
-        const input = toolBlock.input as { pages: number; sections: DocSection[] };
-        sections = input.sections ?? [];
-        pages = input.pages ?? 0;
+
+      if (!toolBlock || toolBlock.type !== "tool_use") {
+        const reason = response.stop_reason ?? "unknown";
+        console.error("[extract-document] sem tool_use na resposta. stop_reason:", reason);
+        throw new Error(`Extração incompleta (stop_reason: ${reason}). Tente reenviar o PDF.`);
+      }
+
+      const input = toolBlock.input as { pages: number; sections: DocSection[] };
+      const sections: DocSection[] = input.sections ?? [];
+      const pages: number = input.pages ?? 0;
+
+      if (sections.length === 0) {
+        console.error("[extract-document] Claude retornou seções vazias.");
+        throw new Error("Claude não identificou seções no documento. Tente reenviar o PDF.");
       }
 
       await supabaseAdmin
