@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, PDFRawStream, PDFName, PDFNumber } from "pdf-lib";
 import { inflateSync, deflateSync } from "node:zlib";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
@@ -22,7 +22,6 @@ function normalize(str: string): string {
   return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
 }
 
-// Mapa: valor original → valor editado (apenas campos que mudaram)
 function buildReplacements(original: DocSection[], edited: DocSection[]): Map<string, string> {
   const map = new Map<string, string>();
   for (let si = 0; si < Math.min(original.length, edited.length); si++) {
@@ -48,38 +47,62 @@ function buildReplacements(original: DocSection[], edited: DocSection[]): Map<st
   return map;
 }
 
-// Substitui texto em bytes de um content stream descomprimido
-function replaceInBytes(bytes: Buffer, replacements: Map<string, string>): { result: Buffer; count: number } {
+function replaceInBuffer(bytes: Buffer, replacements: Map<string, string>): { result: Buffer; count: number } {
   let text = bytes.toString("latin1");
   let count = 0;
   for (const [oldVal, newVal] of replacements) {
     if (oldVal.length < 2) continue;
     const escaped = oldVal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(escaped, "g");
-    const matches = text.match(re);
-    if (matches) {
-      // Preserva tamanho com espaços para não deslocar outros objetos
+    const found = text.match(re);
+    if (found) {
+      // Pad/truncate para manter tamanho original e não deslocar bytes
       const padded = newVal.length <= oldVal.length
         ? newVal + " ".repeat(oldVal.length - newVal.length)
-        : newVal.slice(0, oldVal.length); // trunca se maior (último recurso)
+        : newVal.slice(0, oldVal.length);
       text = text.replace(re, padded);
-      count += matches.length;
+      count += found.length;
     }
   }
   return { result: Buffer.from(text, "latin1"), count };
 }
 
-// Processa content streams de cada página: descomprime FlateDecode → substitui → recomprime
-function patchPDFStreams(pdfBytes: Buffer, replacements: Map<string, string>): { result: Buffer; count: number } {
+async function patchStreams(pdfBytes: Buffer, replacements: Map<string, string>): Promise<{ result: Buffer; count: number }> {
+  const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
   let totalCount = 0;
-  let pdf = pdfBytes.toString("latin1");
 
-  // Regex para blocos "stream\n...\nendstream" com FlateDecode
-  // Fazemos substituição no raw bytes para streams sem filtro (mais simples e seguro)
-  const { result: patched, count } = replaceInBytes(pdfBytes, replacements);
-  totalCount += count;
+  for (const [ref, obj] of pdfDoc.context.enumerateIndirectObjects()) {
+    if (!(obj instanceof PDFRawStream)) continue;
 
-  return { result: patched, count: totalCount };
+    const dict = obj.dict;
+    const filter = dict.get(PDFName.of("Filter"));
+    const filterStr = filter?.toString() ?? "";
+    const isFlate = filterStr.includes("FlateDecode") || filterStr.includes("/Fl");
+    const noFilter = !filter;
+
+    if (!isFlate && !noFilter) continue;
+
+    let decompressed: Buffer;
+    try {
+      decompressed = isFlate
+        ? inflateSync(Buffer.from(obj.contents))
+        : Buffer.from(obj.contents);
+    } catch {
+      continue;
+    }
+
+    const { result: patched, count } = replaceInBuffer(decompressed, replacements);
+    if (count === 0) continue;
+    totalCount += count;
+
+    const newContent = isFlate ? deflateSync(patched) : patched;
+
+    // Atualiza Length e recria o stream
+    dict.set(PDFName.of("Length"), PDFNumber.of(newContent.length));
+    pdfDoc.context.assign(ref, PDFRawStream.of(dict, newContent));
+  }
+
+  return { result: Buffer.from(await pdfDoc.save()), count: totalCount };
 }
 
 export const exportDocumentFn = createServerFn({ method: "POST" })
@@ -103,7 +126,7 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
     const buf = Buffer.from(await file.arrayBuffer());
     const exportName = doc.filename.replace(/\.pdf$/i, "") + "_editado.pdf";
 
-    // --- 1. Tenta AcroForm ---
+    // --- 1. AcroForm ---
     const pdfDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
     const form = pdfDoc.getForm();
     const acroFields = form.getFields();
@@ -120,12 +143,11 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
           }
         }
       }
-
       let filled = 0;
       for (const field of acroFields) {
         const name = field.getName();
         const n = normalize(name);
-        let val: string | null = valueMap.get(n) ?? null;
+        let val = valueMap.get(n) ?? null;
         if (!val) {
           for (const [k, v] of valueMap) {
             if (k.length >= 3 && (n.includes(k) || k.includes(n))) { val = v; break; }
@@ -134,40 +156,23 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
         if (!val) continue;
         try { form.getTextField(name).setText(val); filled++; continue; } catch {}
         try {
-          const v = val.toLowerCase();
-          if (v === "sim" || v === "true" || v === "x" || v === "1") { form.getCheckBox(name).check(); filled++; }
+          if (["sim","true","x","1"].includes(val.toLowerCase())) { form.getCheckBox(name).check(); filled++; }
           continue;
         } catch {}
         try { form.getDropdown(name).select(val); filled++; } catch {}
       }
       try { form.flatten(); } catch {}
-
       const bytes = await pdfDoc.save();
-      return {
-        base64: Buffer.from(bytes).toString("base64"),
-        filename: exportName,
-        method: "acroform",
-        replacedCount: filled,
-      };
+      return { base64: Buffer.from(bytes).toString("base64"), filename: exportName, method: "acroform", replacedCount: filled };
     }
 
-    // --- 2. Fallback: patch direto nos bytes do PDF ---
+    // --- 2. Patch FlateDecode streams ---
     const replacements = buildReplacements(data.originalSections, data.sections);
     if (replacements.size > 0) {
-      const { result, count } = patchPDFStreams(buf, replacements);
-      return {
-        base64: result.toString("base64"),
-        filename: exportName,
-        method: "stream",
-        replacedCount: count,
-      };
+      const { result, count } = await patchStreams(buf, replacements);
+      return { base64: result.toString("base64"), filename: exportName, method: "stream", replacedCount: count };
     }
 
     // --- 3. Sem alterações ---
-    return {
-      base64: buf.toString("base64"),
-      filename: exportName,
-      method: "original",
-      replacedCount: 0,
-    };
+    return { base64: buf.toString("base64"), filename: exportName, method: "original", replacedCount: 0 };
   });
