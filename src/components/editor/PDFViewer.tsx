@@ -125,8 +125,9 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
       if (!token) { show("Sessão expirada. Faça login novamente.", "error"); return; }
 
       const sections = draft ?? doc.sections ?? [];
+      const originalSections = doc.sections ?? [];
       const result = await exportDocumentFn({
-        data: { docId: doc.id, sections },
+        data: { docId: doc.id, sections, originalSections },
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -142,10 +143,12 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
       a.click();
       URL.revokeObjectURL(url);
 
-      if (result.hasAcroFields) {
-        show(`PDF exportado — ${result.filledCount} campo(s) preenchido(s).`, "success");
+      if (result.method === "acroform") {
+        show(`PDF exportado — ${result.replacedCount} campo(s) preenchido(s).`, "success");
+      } else if (result.method === "stream") {
+        show(`PDF exportado — ${result.replacedCount} substituição(ões) aplicada(s).`, "success");
       } else {
-        show("PDF exportado (sem campos AcroForm — layout original preservado).", "info");
+        show("PDF exportado (nenhuma alteração detectada).", "info");
       }
     } catch (err) {
       show(err instanceof Error ? err.message : "Erro ao exportar PDF.", "error");

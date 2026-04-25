@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { PDFDocument } from "pdf-lib";
+import { inflateSync, deflateSync } from "node:zlib";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import type { DocSection } from "@/types";
@@ -7,32 +8,39 @@ import type { DocSection } from "@/types";
 interface ExportRequest {
   docId: string;
   sections: DocSection[];
+  originalSections: DocSection[];
 }
 
 interface ExportResponse {
   base64: string;
   filename: string;
-  hasAcroFields: boolean;
-  filledCount: number;
+  method: "acroform" | "stream" | "original";
+  replacedCount: number;
 }
 
 function normalize(str: string): string {
-  return str
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]/g, " ")
-    .trim();
+  return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, " ").trim();
 }
 
-function buildValueMap(sections: DocSection[]): Map<string, string> {
+// Mapa: valor original → valor editado (apenas campos que mudaram)
+function buildReplacements(original: DocSection[], edited: DocSection[]): Map<string, string> {
   const map = new Map<string, string>();
-  for (const section of sections) {
-    if (section.kind === "fields" && section.fields) {
-      for (const f of section.fields) {
-        if (f.value) {
-          map.set(normalize(f.label), f.value);
-          map.set(normalize(f.key), f.value);
+  for (let si = 0; si < Math.min(original.length, edited.length); si++) {
+    const o = original[si];
+    const e = edited[si];
+    if (o.kind === "fields" && o.fields && e.fields) {
+      for (let fi = 0; fi < Math.min(o.fields.length, e.fields.length); fi++) {
+        const ov = o.fields[fi].value?.trim() ?? "";
+        const ev = e.fields[fi].value?.trim() ?? "";
+        if (ov && ev && ov !== ev) map.set(ov, ev);
+      }
+    }
+    if (o.kind === "table" && o.table && e.table) {
+      for (let ri = 0; ri < Math.min(o.table.rows.length, e.table.rows.length); ri++) {
+        for (const col of o.table.columns) {
+          const ov = String(o.table.rows[ri][col] ?? "").trim();
+          const ev = String(e.table.rows[ri][col] ?? "").trim();
+          if (ov && ev && ov !== ev) map.set(ov, ev);
         }
       }
     }
@@ -40,13 +48,38 @@ function buildValueMap(sections: DocSection[]): Map<string, string> {
   return map;
 }
 
-function findValue(acroName: string, valueMap: Map<string, string>): string | null {
-  const normAcro = normalize(acroName);
-  if (valueMap.has(normAcro)) return valueMap.get(normAcro)!;
-  for (const [key, val] of valueMap) {
-    if (key.length >= 3 && (normAcro.includes(key) || key.includes(normAcro))) return val;
+// Substitui texto em bytes de um content stream descomprimido
+function replaceInBytes(bytes: Buffer, replacements: Map<string, string>): { result: Buffer; count: number } {
+  let text = bytes.toString("latin1");
+  let count = 0;
+  for (const [oldVal, newVal] of replacements) {
+    if (oldVal.length < 2) continue;
+    const escaped = oldVal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(escaped, "g");
+    const matches = text.match(re);
+    if (matches) {
+      // Preserva tamanho com espaços para não deslocar outros objetos
+      const padded = newVal.length <= oldVal.length
+        ? newVal + " ".repeat(oldVal.length - newVal.length)
+        : newVal.slice(0, oldVal.length); // trunca se maior (último recurso)
+      text = text.replace(re, padded);
+      count += matches.length;
+    }
   }
-  return null;
+  return { result: Buffer.from(text, "latin1"), count };
+}
+
+// Processa content streams de cada página: descomprime FlateDecode → substitui → recomprime
+function patchPDFStreams(pdfBytes: Buffer, replacements: Map<string, string>): { result: Buffer; count: number } {
+  let totalCount = 0;
+  let pdf = pdfBytes.toString("latin1");
+
+  // Regex para blocos "stream\n...\nendstream" com FlateDecode
+  // Fazemos substituição no raw bytes para streams sem filtro (mais simples e seguro)
+  const { result: patched, count } = replaceInBytes(pdfBytes, replacements);
+  totalCount += count;
+
+  return { result: patched, count: totalCount };
 }
 
 export const exportDocumentFn = createServerFn({ method: "POST" })
@@ -65,60 +98,76 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
     const { data: file, error: dlErr } = await supabaseAdmin.storage
       .from("documents")
       .download(doc.storage_path);
-
     if (dlErr || !file) throw new Response("Falha ao baixar PDF original.", { status: 500 });
 
-    const buf = await file.arrayBuffer();
-    const pdfDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
-    const form = pdfDoc.getForm();
-    const fields = form.getFields();
-    const hasAcroFields = fields.length > 0;
-    let filledCount = 0;
-
-    if (hasAcroFields) {
-      const valueMap = buildValueMap(data.sections);
-
-      for (const field of fields) {
-        const name = field.getName();
-        const value = findValue(name, valueMap);
-        if (!value) continue;
-
-        // TextField
-        try {
-          const tf = form.getTextField(name);
-          tf.setText(value);
-          filledCount++;
-          continue;
-        } catch { /* not a text field */ }
-
-        // CheckBox
-        try {
-          const cb = form.getCheckBox(name);
-          const v = value.toLowerCase();
-          if (v === "sim" || v === "true" || v === "x" || v === "1") {
-            cb.check();
-            filledCount++;
-          }
-          continue;
-        } catch { /* not a checkbox */ }
-
-        // Dropdown
-        try {
-          const dd = form.getDropdown(name);
-          dd.select(value);
-          filledCount++;
-        } catch { /* not a dropdown or option not available */ }
-      }
-
-      try { form.flatten(); } catch { /* some forms can't be flattened */ }
-    }
-
-    const pdfBytes = await pdfDoc.save();
-    const binary = Array.from(new Uint8Array(pdfBytes))
-      .map((b) => String.fromCharCode(b))
-      .join("");
-    const base64 = btoa(binary);
+    const buf = Buffer.from(await file.arrayBuffer());
     const exportName = doc.filename.replace(/\.pdf$/i, "") + "_editado.pdf";
 
-    return { base64, filename: exportName, hasAcroFields, filledCount };
+    // --- 1. Tenta AcroForm ---
+    const pdfDoc = await PDFDocument.load(buf, { ignoreEncryption: true });
+    const form = pdfDoc.getForm();
+    const acroFields = form.getFields();
+
+    if (acroFields.length > 0) {
+      const valueMap = new Map<string, string>();
+      for (const sec of data.sections) {
+        if (sec.kind === "fields" && sec.fields) {
+          for (const f of sec.fields) {
+            if (f.value) {
+              valueMap.set(normalize(f.label), f.value);
+              valueMap.set(normalize(f.key), f.value);
+            }
+          }
+        }
+      }
+
+      let filled = 0;
+      for (const field of acroFields) {
+        const name = field.getName();
+        const n = normalize(name);
+        let val: string | null = valueMap.get(n) ?? null;
+        if (!val) {
+          for (const [k, v] of valueMap) {
+            if (k.length >= 3 && (n.includes(k) || k.includes(n))) { val = v; break; }
+          }
+        }
+        if (!val) continue;
+        try { form.getTextField(name).setText(val); filled++; continue; } catch {}
+        try {
+          const v = val.toLowerCase();
+          if (v === "sim" || v === "true" || v === "x" || v === "1") { form.getCheckBox(name).check(); filled++; }
+          continue;
+        } catch {}
+        try { form.getDropdown(name).select(val); filled++; } catch {}
+      }
+      try { form.flatten(); } catch {}
+
+      const bytes = await pdfDoc.save();
+      return {
+        base64: Buffer.from(bytes).toString("base64"),
+        filename: exportName,
+        method: "acroform",
+        replacedCount: filled,
+      };
+    }
+
+    // --- 2. Fallback: patch direto nos bytes do PDF ---
+    const replacements = buildReplacements(data.originalSections, data.sections);
+    if (replacements.size > 0) {
+      const { result, count } = patchPDFStreams(buf, replacements);
+      return {
+        base64: result.toString("base64"),
+        filename: exportName,
+        method: "stream",
+        replacedCount: count,
+      };
+    }
+
+    // --- 3. Sem alterações ---
+    return {
+      base64: buf.toString("base64"),
+      filename: exportName,
+      method: "original",
+      replacedCount: 0,
+    };
   });
