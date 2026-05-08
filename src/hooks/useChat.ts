@@ -29,7 +29,7 @@ export function useChat({ doc, onApplyEdits, onAfterEdit, onBlocked, canEdit }: 
       if (!trimmed) return;
 
       const userMsg: ChatMessage = {
-        id: Math.random().toString(36).slice(2),
+        id: crypto.randomUUID(),
         role: "user",
         content: trimmed,
         timestamp: new Date(),
@@ -41,7 +41,7 @@ export function useChat({ doc, onApplyEdits, onAfterEdit, onBlocked, canEdit }: 
         setMessages((m) => [
           ...m,
           {
-            id: Math.random().toString(36).slice(2),
+            id: crypto.randomUUID(),
             role: "ai",
             content:
               "Você atingiu o limite gratuito deste mês (1 edição). Faça upgrade para continuar editando.",
@@ -55,7 +55,7 @@ export function useChat({ doc, onApplyEdits, onAfterEdit, onBlocked, canEdit }: 
         setMessages((m) => [
           ...m,
           {
-            id: Math.random().toString(36).slice(2),
+            id: crypto.randomUUID(),
             role: "ai",
             content: "Nenhum documento carregado.",
             timestamp: new Date(),
@@ -86,7 +86,7 @@ export function useChat({ doc, onApplyEdits, onAfterEdit, onBlocked, canEdit }: 
         onApplyEdits(result.edits);
 
         const aiMsg: ChatMessage = {
-          id: Math.random().toString(36).slice(2),
+          id: crypto.randomUUID(),
           role: "ai",
           content: result.reply,
           edits: result.edits,
@@ -110,7 +110,7 @@ export function useChat({ doc, onApplyEdits, onAfterEdit, onBlocked, canEdit }: 
         setMessages((m) => [
           ...m,
           {
-            id: Math.random().toString(36).slice(2),
+            id: crypto.randomUUID(),
             role: "ai",
             content: `Não consegui processar sua solicitação: ${msg}`,
             timestamp: new Date(),

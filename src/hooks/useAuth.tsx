@@ -64,6 +64,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         fetchProfile(session.user.id).then((p) => {
           setProfile(p);
           if (!initialized) { initialized = true; setLoading(false); }
+        }).catch(() => {
+          setProfile(null);
+          if (!initialized) { initialized = true; setLoading(false); }
         });
       } else {
         setProfile(null);
@@ -80,11 +83,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setProfile(p);
           initialized = true;
           setLoading(false);
+        }).catch(() => {
+          initialized = true;
+          setLoading(false);
         });
       } else {
         initialized = true;
         setLoading(false);
       }
+    }).catch(() => {
+      if (!initialized) { initialized = true; setLoading(false); }
     });
 
     return () => sub.subscription.unsubscribe();

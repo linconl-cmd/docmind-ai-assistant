@@ -131,7 +131,6 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      // Converte base64 para Blob e dispara download
       const binary = atob(result.base64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -140,8 +139,13 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
       const a = document.createElement("a");
       a.href = url;
       a.download = result.filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 200);
 
       if (result.method === "acroform") {
         show(`PDF exportado — ${result.replacedCount} campo(s) preenchido(s).`, "success");

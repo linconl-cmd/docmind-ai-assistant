@@ -138,7 +138,7 @@ export function useDocuments() {
               .from("documents")
               .update({ fields_detected: updated.sections as never })
               .eq("id", docId)
-              .then(() => undefined);
+              .then(({ error: e }) => { if (e) console.error("Failed to sync sections:", e.message); });
           }
           return updated;
         }),
@@ -170,7 +170,7 @@ export function useDocuments() {
         .from("documents")
         .select("edit_count")
         .eq("id", docId)
-        .single();
+        .maybeSingle();
       if (doc) {
         await supabase
           .from("documents")
