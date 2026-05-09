@@ -8,7 +8,6 @@ import type { DocSection } from "@/types";
 interface ExportRequest {
   docId: string;
   sections: DocSection[];
-  originalSections: DocSection[];
 }
 
 interface ExportResponse {
@@ -111,7 +110,7 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
   .handler(async ({ data, context }): Promise<ExportResponse> => {
     const { data: doc, error } = await supabaseAdmin
       .from("documents")
-      .select("storage_path, user_id, filename")
+      .select("storage_path, user_id, filename, claude_context")
       .eq("id", data.docId)
       .maybeSingle();
 
@@ -167,7 +166,11 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
     }
 
     // --- 2. Patch FlateDecode streams ---
-    const replacements = buildReplacements(data.originalSections, data.sections);
+    let originalSections: DocSection[] = [];
+    if (doc.claude_context) {
+      try { originalSections = JSON.parse(doc.claude_context); } catch {}
+    }
+    const replacements = buildReplacements(originalSections, data.sections);
     if (replacements.size > 0) {
       const { result, count } = await patchStreams(buf, replacements);
       return { base64: result.toString("base64"), filename: exportName, method: "stream", replacedCount: count };

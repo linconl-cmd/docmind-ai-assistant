@@ -125,9 +125,8 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
       if (!token) { show("Sessão expirada. Faça login novamente.", "error"); return; }
 
       const sections = draft ?? doc.sections ?? [];
-      const originalSections = doc.sections ?? [];
       const result = await exportDocumentFn({
-        data: { docId: doc.id, sections, originalSections },
+        data: { docId: doc.id, sections },
         headers: { Authorization: `Bearer ${token}` },
       });
 

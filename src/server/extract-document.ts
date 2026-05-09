@@ -140,6 +140,7 @@ export const extractDocumentFn = createServerFn({ method: "POST" })
           status: "ready",
           pages,
           fields_detected: sections as unknown as never,
+          claude_context: JSON.stringify(sections),
         })
         .eq("id", data.docId);
 
