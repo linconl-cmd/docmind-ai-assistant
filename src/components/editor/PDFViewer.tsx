@@ -150,6 +150,8 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
         show(`PDF exportado — ${result.replacedCount} campo(s) preenchido(s).`, "success");
       } else if (result.method === "stream") {
         show(`PDF exportado — ${result.replacedCount} substituição(ões) aplicada(s).`, "success");
+      } else if (result.method === "overlay") {
+        show(`PDF exportado — ${result.replacedCount} alteração(ões) na página anexa.`, "success");
       } else {
         show("PDF exportado (nenhuma alteração detectada).", "info");
       }
