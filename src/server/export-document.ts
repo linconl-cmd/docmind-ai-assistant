@@ -15,6 +15,7 @@ interface ExportResponse {
   filename: string;
   method: "acroform" | "stream" | "overlay" | "original";
   replacedCount: number;
+  debug?: string;
 }
 
 function normalize(str: string): string {
@@ -369,27 +370,30 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
     if (doc.claude_context) {
       try { originalSections = JSON.parse(doc.claude_context); } catch {}
     }
+
+    const hasContext = originalSections.length > 0;
     const replacements = buildReplacements(originalSections, data.sections);
+    const debugInfo = `ctx=${hasContext}|origSec=${originalSections.length}|editSec=${data.sections.length}|diffs=${replacements.size}`;
+    console.log(`[export] ${debugInfo}`);
 
     if (replacements.size > 0) {
-      console.log(`[export] ${replacements.size} replacement(s) to attempt:`,
+      console.log(`[export] replacements:`,
         [...replacements.entries()].map(([k, v]) => `"${k}" → "${v}"`).join(", "));
 
       const { result, count } = await patchStreams(buf, replacements);
 
       if (count > 0) {
-        console.log(`[export] stream patching succeeded: ${count} replacement(s)`);
-        return { base64: result.toString("base64"), filename: exportName, method: "stream", replacedCount: count };
+        return { base64: result.toString("base64"), filename: exportName, method: "stream", replacedCount: count, debug: debugInfo };
       }
 
       // --- 3. Fallback: overlay page with changes ---
       console.log("[export] stream patching found 0 matches, falling back to overlay");
       const overlay = await overlayEdits(buf, originalSections, data.sections);
       if (overlay.count > 0) {
-        return { base64: overlay.result.toString("base64"), filename: exportName, method: "overlay", replacedCount: overlay.count };
+        return { base64: overlay.result.toString("base64"), filename: exportName, method: "overlay", replacedCount: overlay.count, debug: debugInfo };
       }
     }
 
     // --- 4. No changes ---
-    return { base64: buf.toString("base64"), filename: exportName, method: "original", replacedCount: 0 };
+    return { base64: buf.toString("base64"), filename: exportName, method: "original", replacedCount: 0, debug: debugInfo };
   });

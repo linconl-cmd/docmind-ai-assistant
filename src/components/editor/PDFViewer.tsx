@@ -146,15 +146,7 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
         URL.revokeObjectURL(url);
       }, 200);
 
-      if (result.method === "acroform") {
-        show(`PDF exportado — ${result.replacedCount} campo(s) preenchido(s).`, "success");
-      } else if (result.method === "stream") {
-        show(`PDF exportado — ${result.replacedCount} substituição(ões) aplicada(s).`, "success");
-      } else if (result.method === "overlay") {
-        show(`PDF exportado — ${result.replacedCount} alteração(ões) na página anexa.`, "success");
-      } else {
-        show("PDF exportado (nenhuma alteração detectada).", "info");
-      }
+      show(`[${result.method}] ${result.replacedCount} alteração(ões). ${result.debug ?? ""}`, result.replacedCount > 0 ? "success" : "info");
     } catch (err) {
       show(err instanceof Error ? err.message : "Erro ao exportar PDF.", "error");
     } finally {
