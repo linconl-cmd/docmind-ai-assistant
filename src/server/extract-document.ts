@@ -4,7 +4,7 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import type { DocSection } from "@/types";
 
-const MODEL = "claude-haiku-4-5";
+const MODEL = "claude-sonnet-4-6";
 
 interface ExtractRequest {
   docId: string;
@@ -97,21 +97,26 @@ export const extractDocumentFn = createServerFn({ method: "POST" })
     try {
       const response = await anthropic.messages.create({
         model: MODEL,
-        max_tokens: 8192,
+        max_tokens: 16384,
         tools: [extractTool],
         tool_choice: { type: "tool", name: "store_document_structure" },
-        system: `Extrator de documentos brasileiros. Regras:
-1. Primeira seção SEMPRE: id="cabecalho", title="Cabeçalho", kind="fields". Extraia do topo do PDF: título, ano, nome, CPF/CNPJ, órgão emissor. Preencha os valores reais do PDF.
-2. Demais seções: extraia as principais (máx 10 seções). Use kind="table" para tabelas, kind="fields" para campos.
-3. Valores: preencha "value" com o que está no PDF. Vazio se não preenchido. Nunca invente.
-4. Seja CONCISO: máx 15 campos por seção de fields, máx 10 linhas por tabela.
-5. Datas: dd/mm/aaaa. Valores: R$ X.XXX,XX.`,
+        system: `Você é um extrator de documentos jurídicos brasileiros. Sua tarefa é ler o PDF COMPLETO — TODAS as páginas, do início ao fim — e extrair TODOS os dados estruturados.
+
+REGRAS OBRIGATÓRIAS:
+1. Primeira seção SEMPRE: id="cabecalho", title="Cabeçalho", kind="fields". Extraia: título do documento, número/ano, partes envolvidas (nomes, CPF/CNPJ), órgão emissor, data, e todos os dados de identificação do topo.
+2. Percorra CADA PÁGINA do PDF. Crie uma seção para cada bloco de conteúdo distinto: cláusulas, condições, valores, prazos, obrigações, penalidades, assinaturas, etc.
+3. Use kind="fields" para campos chave-valor. Use kind="table" para dados tabulares.
+4. Preencha "value" com o texto EXATO do PDF. Se um campo está vazio no PDF, use string vazia. NUNCA invente dados.
+5. Datas no formato dd/mm/aaaa. Valores monetários no formato R$ X.XXX,XX.
+6. NÃO OMITA INFORMAÇÕES. Extraia todos os campos de cada seção — não resuma, não pule.
+7. Seções do MEIO e do FINAL do documento são tão importantes quanto as do início. Extraia tudo.
+8. IDs de seção devem ser únicos e descritivos (ex: "clausula_1", "valores", "penalidades", "assinaturas").`,
         messages: [
           {
             role: "user",
             content: [
               { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
-              { type: "text", text: "Extraia a estrutura deste documento usando a tool store_document_structure." },
+              { type: "text", text: "Leia TODAS as páginas deste PDF do início ao fim. Extraia a estrutura COMPLETA — incluindo seções do meio e do final do documento — usando a tool store_document_structure. Não omita nenhuma seção ou campo." },
             ],
           },
         ],

@@ -52,35 +52,34 @@ function EditorPage() {
     (edits: EditChange[]) => {
       if (edits.length === 0 || !docs.selectedDocument) return;
 
+      const editMap = new Map(edits.map((e) => [e.campo, e.valor_novo]));
+
       docs.updateDocumentSections(docs.selectedDocument.id, (doc): AppDocument => {
         const sections = (doc.sections ?? []).map((sec) => {
           if (sec.kind === "fields" && sec.fields) {
             return {
               ...sec,
               fields: sec.fields.map((f) => {
-                const e = edits.find((x) => x.campo === f.key);
-                return e ? { ...f, value: e.valor_novo } : f;
+                const novo = editMap.get(f.key);
+                return novo !== undefined ? { ...f, value: novo } : f;
               }),
             };
           }
           if (sec.kind === "table" && sec.table) {
-            const seniorEdit = edits.find((x) => x.campo === "table-valores-senior");
-            const mensalEdit = edits.find((x) => x.campo === "table-valores-mensalidade");
             return {
               ...sec,
               table: {
                 ...sec.table,
-                rows: sec.table.rows.map((r) => {
-                  const desc = String(r["Descrição"] ?? "").toLowerCase();
-                  if (seniorEdit && desc.includes("sênior")) {
-                    const novoUnit = seniorEdit.valor_novo;
-                    const total = `R$ ${(320 * 40).toLocaleString("pt-BR")},00`;
-                    return { ...r, "Valor unitário": novoUnit, Total: total };
+                rows: sec.table.rows.map((row, rIdx) => {
+                  let updated = row;
+                  for (const col of sec.table!.columns) {
+                    const key = `${sec.id}-r${rIdx}-${col}`;
+                    const novo = editMap.get(key);
+                    if (novo !== undefined) {
+                      updated = { ...updated, [col]: novo };
+                    }
                   }
-                  if (mensalEdit && desc.includes("mensalidade")) {
-                    return { ...r, "Valor unitário": mensalEdit.valor_novo, Total: mensalEdit.valor_novo };
-                  }
-                  return r;
+                  return updated;
                 }),
               },
             };

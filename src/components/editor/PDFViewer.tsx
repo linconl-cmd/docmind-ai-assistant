@@ -146,7 +146,7 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
         URL.revokeObjectURL(url);
       }, 200);
 
-      show(`[${result.method}] ${result.replacedCount} alteração(ões). ${result.debug ?? ""}`, result.replacedCount > 0 ? "success" : "info");
+      show(`PDF gerado com ${result.replacedCount} campo(s).`, "success");
     } catch (err) {
       show(err instanceof Error ? err.message : "Erro ao exportar PDF.", "error");
     } finally {
@@ -182,9 +182,9 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
               </Button>
             </>
           )}
-          {!dirty && doc.edit_count > 0 && (
+          {!dirty && doc.status === "ready" && (
             <Button size="sm" variant="subtle" leftIcon={<Download className="h-4 w-4" />} onClick={handleDownload} loading={exporting} disabled={exporting}>
-              {exporting ? "Exportando…" : "Baixar PDF editado"}
+              {exporting ? "Gerando PDF…" : "Baixar PDF"}
             </Button>
           )}
         </div>

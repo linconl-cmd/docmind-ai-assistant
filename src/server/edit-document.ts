@@ -5,7 +5,7 @@ import type { AppDocument, EditChange } from "@/types";
 
 const MODEL = "claude-haiku-4-5";
 const MAX_TOKENS_OUTPUT = 4096;
-const MAX_INPUT_CHARS = 32000;
+const MAX_INPUT_CHARS = 64000;
 
 const PRICE_PER_1M = { input: 1.0, output: 5.0 };
 

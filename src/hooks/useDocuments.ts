@@ -129,33 +129,45 @@ export function useDocuments() {
 
   const updateDocumentSections = useCallback(
     (docId: string, updater: (doc: AppDocument) => AppDocument) => {
-      setDocuments((docs) =>
-        docs.map((d) => {
+      setDocuments((docs) => {
+        const next = docs.map((d) => {
           if (d.id !== docId) return d;
-          const updated = updater(d);
-          if (updated.sections) {
-            supabase
-              .from("documents")
-              .update({ fields_detected: updated.sections as never })
-              .eq("id", docId)
-              .then(({ error: e }) => { if (e) console.error("Failed to sync sections:", e.message); });
-          }
-          return updated;
-        }),
-      );
+          return updater(d);
+        });
+        const updated = next.find((d) => d.id === docId);
+        if (updated?.sections) {
+          supabase
+            .from("documents")
+            .update({
+              fields_detected: updated.sections as never,
+              edit_count: updated.edit_count,
+            })
+            .eq("id", docId)
+            .then(({ error: e }) => {
+              if (e) console.error("[updateDocumentSections] DB sync failed:", e.message);
+            });
+        }
+        return next;
+      });
     },
     [],
   );
 
   const saveDocumentSections = useCallback(
     async (docId: string, sections: DocSection[]) => {
+      const { data: current } = await supabase
+        .from("documents")
+        .select("edit_count")
+        .eq("id", docId)
+        .maybeSingle();
+      const newCount = (current?.edit_count ?? 0) + 1;
       const { error } = await supabase
         .from("documents")
-        .update({ fields_detected: sections as never })
+        .update({ fields_detected: sections as never, edit_count: newCount })
         .eq("id", docId);
       if (error) throw error;
       setDocuments((docs) =>
-        docs.map((d) => (d.id === docId ? { ...d, sections, edit_count: d.edit_count + 1 } : d)),
+        docs.map((d) => (d.id === docId ? { ...d, sections, edit_count: newCount } : d)),
       );
     },
     [],
