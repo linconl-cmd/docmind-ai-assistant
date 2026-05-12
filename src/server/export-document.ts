@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { getDocument, type TextItem as PdfjsTextItem } from "pdfjs-dist";
+import { PDFDocument, PDFRawStream, PDFName, StandardFonts, rgb } from "pdf-lib";
+import { inflateSync } from "node:zlib";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import type { DocSection } from "@/types";
@@ -43,6 +43,241 @@ function buildReplacements(original: DocSection[], edited: DocSection[]): Map<st
   return map;
 }
 
+// --- Content stream parser to extract text with positions ---
+
+interface TextItem {
+  text: string;
+  x: number;
+  y: number;
+  fontSize: number;
+}
+
+function decodePdfString(raw: string): string {
+  if (!raw.startsWith("(") || !raw.endsWith(")")) return "";
+  const inner = raw.slice(1, -1);
+  return inner
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\\(/g, "(")
+    .replace(/\\\)/g, ")")
+    .replace(/\\\\/g, "\\")
+    .replace(/\\(\d{1,3})/g, (_, oct: string) => String.fromCharCode(parseInt(oct, 8)));
+}
+
+function extractStringsFromTJArray(raw: string): string {
+  const parts: string[] = [];
+  const re = /\(([^)]*(?:\\.[^)]*)*)\)/g;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    parts.push(
+      m[1]
+        .replace(/\\n/g, "\n")
+        .replace(/\\r/g, "\r")
+        .replace(/\\t/g, "\t")
+        .replace(/\\\(/g, "(")
+        .replace(/\\\)/g, ")")
+        .replace(/\\\\/g, "\\")
+        .replace(/\\(\d{1,3})/g, (_, oct: string) => String.fromCharCode(parseInt(oct, 8))),
+    );
+  }
+  return parts.join("");
+}
+
+function tokenize(stream: string): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  const len = stream.length;
+
+  while (i < len) {
+    while (i < len && /\s/.test(stream[i])) i++;
+    if (i >= len) break;
+
+    const ch = stream[i];
+
+    if (ch === "%") {
+      while (i < len && stream[i] !== "\n" && stream[i] !== "\r") i++;
+      continue;
+    }
+
+    if (ch === "(") {
+      let depth = 1;
+      let s = "(";
+      i++;
+      while (i < len && depth > 0) {
+        if (stream[i] === "\\") {
+          s += stream[i] + (stream[i + 1] ?? "");
+          i += 2;
+          continue;
+        }
+        if (stream[i] === "(") depth++;
+        if (stream[i] === ")") depth--;
+        s += stream[i];
+        i++;
+      }
+      tokens.push(s);
+      continue;
+    }
+
+    if (ch === "<") {
+      if (i + 1 < len && stream[i + 1] === "<") {
+        tokens.push("<<");
+        i += 2;
+        continue;
+      }
+      let s = "<";
+      i++;
+      while (i < len && stream[i] !== ">") {
+        s += stream[i];
+        i++;
+      }
+      if (i < len) {
+        s += ">";
+        i++;
+      }
+      tokens.push(s);
+      continue;
+    }
+
+    if (ch === ">") {
+      if (i + 1 < len && stream[i + 1] === ">") {
+        tokens.push(">>");
+        i += 2;
+      } else {
+        i++;
+      }
+      continue;
+    }
+
+    if (ch === "[") {
+      let depth = 1;
+      let s = "[";
+      i++;
+      while (i < len && depth > 0) {
+        if (stream[i] === "\\") {
+          s += stream[i] + (stream[i + 1] ?? "");
+          i += 2;
+          continue;
+        }
+        if (stream[i] === "[") depth++;
+        if (stream[i] === "]") depth--;
+        s += stream[i];
+        i++;
+      }
+      tokens.push(s);
+      continue;
+    }
+
+    let s = "";
+    while (i < len && !/[\s()[\]<>/%]/.test(stream[i])) {
+      s += stream[i];
+      i++;
+    }
+    if (s) tokens.push(s);
+  }
+
+  return tokens;
+}
+
+function parseTextItems(streamBytes: Buffer): TextItem[] {
+  const text = streamBytes.toString("latin1");
+  const tokens = tokenize(text);
+  const items: TextItem[] = [];
+  const stack: string[] = [];
+
+  let inText = false;
+  let fontSize = 12;
+  let tmX = 0;
+  let tmY = 0;
+
+  for (const token of tokens) {
+    if (token === "BT") {
+      inText = true;
+      tmX = 0;
+      tmY = 0;
+      stack.length = 0;
+      continue;
+    }
+    if (token === "ET") {
+      inText = false;
+      stack.length = 0;
+      continue;
+    }
+
+    if (!inText) {
+      stack.length = 0;
+      continue;
+    }
+
+    switch (token) {
+      case "Tf":
+        if (stack.length >= 2) fontSize = Math.abs(parseFloat(stack[stack.length - 1])) || 12;
+        stack.length = 0;
+        break;
+      case "Tm":
+        if (stack.length >= 6) {
+          tmX = parseFloat(stack[stack.length - 2]) || 0;
+          tmY = parseFloat(stack[stack.length - 1]) || 0;
+          const scaleY = parseFloat(stack[stack.length - 4]);
+          if (scaleY && Math.abs(scaleY) > 1) fontSize = Math.abs(scaleY);
+        }
+        stack.length = 0;
+        break;
+      case "Td":
+      case "TD":
+        if (stack.length >= 2) {
+          tmX += parseFloat(stack[stack.length - 2]) || 0;
+          tmY += parseFloat(stack[stack.length - 1]) || 0;
+        }
+        stack.length = 0;
+        break;
+      case "T*":
+        tmY -= fontSize * 1.2;
+        stack.length = 0;
+        break;
+      case "Tj": {
+        if (stack.length >= 1) {
+          const str = decodePdfString(stack[stack.length - 1]);
+          if (str.trim()) items.push({ text: str, x: tmX, y: tmY, fontSize });
+        }
+        stack.length = 0;
+        break;
+      }
+      case "TJ": {
+        if (stack.length >= 1) {
+          const str = extractStringsFromTJArray(stack[stack.length - 1]);
+          if (str.trim()) items.push({ text: str, x: tmX, y: tmY, fontSize });
+        }
+        stack.length = 0;
+        break;
+      }
+      case "'": {
+        tmY -= fontSize * 1.2;
+        if (stack.length >= 1) {
+          const str = decodePdfString(stack[stack.length - 1]);
+          if (str.trim()) items.push({ text: str, x: tmX, y: tmY, fontSize });
+        }
+        stack.length = 0;
+        break;
+      }
+      case '"': {
+        tmY -= fontSize * 1.2;
+        if (stack.length >= 3) {
+          const str = decodePdfString(stack[stack.length - 1]);
+          if (str.trim()) items.push({ text: str, x: tmX, y: tmY, fontSize });
+        }
+        stack.length = 0;
+        break;
+      }
+      default:
+        stack.push(token);
+        break;
+    }
+  }
+
+  return items;
+}
+
 interface FoundText {
   pageIndex: number;
   x: number;
@@ -51,39 +286,68 @@ interface FoundText {
   height: number;
 }
 
-async function findTextPositions(
+function findTextPositions(
+  pdfDoc: PDFDocument,
   pdfBytes: Buffer,
   searchTexts: string[],
-): Promise<Map<string, FoundText>> {
+): Map<string, FoundText> {
   const results = new Map<string, FoundText>();
   const remaining = new Set(searchTexts);
 
-  const task = getDocument({
-    data: new Uint8Array(pdfBytes),
-    useWorkerFetch: false,
-    isEvalSupported: false,
-    useSystemFonts: false,
-  });
-  const doc = await task.promise;
+  for (const [, obj] of pdfDoc.context.enumerateIndirectObjects()) {
+    if (remaining.size === 0) break;
+    if (!(obj instanceof PDFRawStream)) continue;
 
-  for (let pi = 0; pi < doc.numPages && remaining.size > 0; pi++) {
-    const page = await doc.getPage(pi + 1);
-    const tc = await page.getTextContent();
-    const items = tc.items.filter(
-      (it): it is PdfjsTextItem => "str" in it && it.str.length > 0,
-    );
+    const dict = obj.dict;
+    const filter = dict.get(PDFName.of("Filter"));
+    const filterStr = filter?.toString() ?? "";
+    const isFlate = filterStr.includes("FlateDecode");
+    const noFilter = !filter;
+    if (!isFlate && !noFilter) continue;
+
+    let decompressed: Buffer;
+    try {
+      decompressed = isFlate
+        ? inflateSync(Buffer.from(obj.contents))
+        : Buffer.from(obj.contents);
+    } catch {
+      continue;
+    }
+
+    const streamText = decompressed.toString("latin1");
+    if (!streamText.includes("BT")) continue;
+
+    // Find which page this stream belongs to
+    let pageIndex = -1;
+    for (let pi = 0; pi < pdfDoc.getPageCount(); pi++) {
+      const page = pdfDoc.getPage(pi);
+      const contentsRef = page.node.get(PDFName.of("Contents"));
+      if (!contentsRef) continue;
+      const contentsStr = contentsRef.toString();
+      // Check if any ref matches
+      for (const [ref, o] of pdfDoc.context.enumerateIndirectObjects()) {
+        if (o === obj && contentsStr.includes(ref.toString())) {
+          pageIndex = pi;
+          break;
+        }
+      }
+      if (pageIndex >= 0) break;
+    }
+
+    const items = parseTextItems(decompressed);
+    if (items.length === 0) continue;
 
     for (const searchText of [...remaining]) {
-      // 1) Single-item match
+      // Single item match
       for (const item of items) {
-        if (item.str.includes(searchText)) {
-          const t = item.transform;
+        if (item.text.includes(searchText)) {
+          const approxWidth = searchText.length * item.fontSize * 0.5;
           results.set(searchText, {
-            pageIndex: pi,
-            x: t[4],
-            y: t[5],
-            width: item.width,
-            height: item.height || Math.abs(t[3]) || 12,
+            pageIndex: Math.max(0, pageIndex),
+            x: item.x,
+            y: item.y,
+            width: approxWidth,
+            height: item.fontSize,
           });
           remaining.delete(searchText);
           break;
@@ -91,30 +355,21 @@ async function findTextPositions(
       }
       if (!remaining.has(searchText)) continue;
 
-      // 2) Multi-item match (text split across adjacent items on same line)
+      // Multi-item match: concatenate items on similar Y position
       for (let i = 0; i < items.length; i++) {
         let concat = "";
         const first = items[i];
-        let endX = first.transform[4];
-
         for (let j = i; j < items.length; j++) {
-          const cur = items[j];
-          if (
-            j > i &&
-            Math.abs(cur.transform[5] - first.transform[5]) > 3
-          )
-            break;
-
-          concat += cur.str;
-          endX = cur.transform[4] + cur.width;
-
+          if (j > i && Math.abs(items[j].y - first.y) > 3) break;
+          concat += items[j].text;
           if (concat.includes(searchText)) {
+            const approxWidth = searchText.length * first.fontSize * 0.5;
             results.set(searchText, {
-              pageIndex: pi,
-              x: first.transform[4],
-              y: first.transform[5],
-              width: endX - first.transform[4],
-              height: first.height || Math.abs(first.transform[3]) || 12,
+              pageIndex: Math.max(0, pageIndex),
+              x: first.x,
+              y: first.y,
+              width: approxWidth,
+              height: first.fontSize,
             });
             remaining.delete(searchText);
             break;
@@ -125,7 +380,6 @@ async function findTextPositions(
     }
   }
 
-  doc.destroy();
   return results;
 }
 
@@ -153,7 +407,6 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
     const pdfBytes = Buffer.from(await file.arrayBuffer());
     const exportName = doc.filename.replace(/\.pdf$/i, "") + "_editado.pdf";
 
-    // Build replacements from original (claude_context) vs edited sections
     let originalSections: DocSection[] = [];
     if (doc.claude_context) {
       try {
@@ -162,9 +415,6 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
     }
 
     const replacements = buildReplacements(originalSections, data.sections);
-    console.log(
-      `[export] ${replacements.size} replacement(s) to apply`,
-    );
 
     if (replacements.size === 0) {
       return {
@@ -175,69 +425,59 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
       };
     }
 
-    // Find where old values appear in the original PDF
-    let positions: Map<string, FoundText>;
     try {
-      positions = await findTextPositions(pdfBytes, [
-        ...replacements.keys(),
-      ]);
+      const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+      const positions = findTextPositions(pdfDoc, pdfBytes, [...replacements.keys()]);
+      console.log(`[export] found ${positions.size}/${replacements.size} text positions`);
+
+      let count = 0;
+      for (const [oldVal, newVal] of replacements) {
+        const pos = positions.get(oldVal);
+        if (!pos) continue;
+
+        const page = pdfDoc.getPage(pos.pageIndex);
+        const fontSize = Math.max(7, Math.min(Math.round(pos.height * 0.85), 14));
+        const newTextWidth = font.widthOfTextAtSize(newVal, fontSize);
+        const coverWidth = Math.max(pos.width, newTextWidth) + 6;
+
+        page.drawRectangle({
+          x: pos.x - 1,
+          y: pos.y - 2,
+          width: coverWidth,
+          height: pos.height + 4,
+          color: rgb(1, 1, 1),
+        });
+
+        page.drawText(newVal, {
+          x: pos.x,
+          y: pos.y,
+          size: fontSize,
+          font,
+          color: rgb(0, 0, 0),
+        });
+
+        count++;
+      }
+
+      const resultBytes = Buffer.from(await pdfDoc.save());
+
+      return {
+        base64: resultBytes.toString("base64"),
+        filename: exportName,
+        method: "overlay",
+        replacedCount: count,
+        debug: `found=${positions.size}|applied=${count}|total=${replacements.size}`,
+      };
     } catch (err) {
-      console.error("[export] pdfjs text extraction failed:", err);
-      positions = new Map();
+      console.error("[export] overlay failed, returning original:", err);
+      return {
+        base64: pdfBytes.toString("base64"),
+        filename: exportName,
+        method: "original",
+        replacedCount: 0,
+        debug: `error: ${err instanceof Error ? err.message : "unknown"}`,
+      };
     }
-
-    console.log(
-      `[export] found ${positions.size}/${replacements.size} text positions`,
-    );
-
-    // Load original PDF with pdf-lib and overlay changes
-    const pdfDoc = await PDFDocument.load(pdfBytes, {
-      ignoreEncryption: true,
-    });
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-
-    let count = 0;
-    for (const [oldVal, newVal] of replacements) {
-      const pos = positions.get(oldVal);
-      if (!pos) continue;
-
-      const page = pdfDoc.getPage(pos.pageIndex);
-      const fontSize = Math.max(7, Math.min(Math.round(pos.height * 0.8), 14));
-
-      // Estimate width needed for new text to size the white cover
-      const newTextWidth = font.widthOfTextAtSize(newVal, fontSize);
-      const coverWidth = Math.max(pos.width, newTextWidth) + 4;
-
-      // White rectangle covers old text
-      page.drawRectangle({
-        x: pos.x - 1,
-        y: pos.y - 2,
-        width: coverWidth,
-        height: pos.height + 4,
-        color: rgb(1, 1, 1),
-      });
-
-      // Draw new text at same position
-      page.drawText(newVal, {
-        x: pos.x,
-        y: pos.y,
-        size: fontSize,
-        font,
-        color: rgb(0, 0, 0),
-      });
-
-      count++;
-    }
-
-    const resultBytes = Buffer.from(await pdfDoc.save());
-    const debug = `found=${positions.size}|applied=${count}|total=${replacements.size}`;
-    console.log(`[export] done: ${debug}`);
-
-    return {
-      base64: resultBytes.toString("base64"),
-      filename: exportName,
-      method: "overlay",
-      replacedCount: count,
-      debug,
-    };
   });
