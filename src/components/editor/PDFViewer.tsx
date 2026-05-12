@@ -130,6 +130,11 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
         headers: { Authorization: `Bearer ${token}` },
       });
 
+      if (!result?.base64) {
+        show("Erro ao gerar PDF. Tente novamente.", "error");
+        return;
+      }
+
       const binary = atob(result.base64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
