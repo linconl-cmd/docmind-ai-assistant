@@ -242,6 +242,25 @@ function findTextInStreams(
       }
     }
 
+    // Build full line text for this stream (group by Y position)
+    const lineMap = new Map<number, { items: TextItem[]; text: string }>();
+    for (const item of items) {
+      const yKey = Math.round(item.y);
+      let line = lineMap.get(yKey);
+      if (!line) {
+        // Check nearby Y values (within 2 units)
+        for (const [k, v] of lineMap) {
+          if (Math.abs(k - yKey) <= 2) { line = v; break; }
+        }
+      }
+      if (!line) {
+        line = { items: [], text: "" };
+        lineMap.set(yKey, line);
+      }
+      line.items.push(item);
+      line.text += item.text;
+    }
+
     for (const searchText of [...remaining]) {
       // Single item match
       for (const item of items) {
@@ -259,26 +278,31 @@ function findTextInStreams(
       }
       if (!remaining.has(searchText)) continue;
 
-      // Multi-item: concatenate items on similar Y
-      for (let i = 0; i < items.length; i++) {
-        let concat = "";
-        const first = items[i];
-        for (let j = i; j < Math.min(i + 20, items.length); j++) {
-          if (j > i && Math.abs(items[j].y - first.y) > 3) break;
-          concat += items[j].text;
-          if (concat.includes(searchText)) {
-            results.set(searchText, {
-              pageIndex,
-              x: first.x,
-              y: first.y,
-              width: searchText.length * first.fontSize * 0.52,
-              height: first.fontSize,
-            });
-            remaining.delete(searchText);
+      // Line-level match (handles fragmented text like "R$" + " " + "1.000,00")
+      for (const [, line] of lineMap) {
+        const idx = line.text.indexOf(searchText);
+        if (idx === -1) continue;
+
+        // Find the item closest to where the match starts
+        let charCount = 0;
+        let matchItem = line.items[0];
+        for (const item of line.items) {
+          if (charCount + item.text.length > idx) {
+            matchItem = item;
             break;
           }
+          charCount += item.text.length;
         }
-        if (!remaining.has(searchText)) break;
+
+        results.set(searchText, {
+          pageIndex,
+          x: matchItem.x,
+          y: matchItem.y,
+          width: searchText.length * matchItem.fontSize * 0.52,
+          height: matchItem.fontSize,
+        });
+        remaining.delete(searchText);
+        break;
       }
     }
   }
@@ -340,6 +364,12 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
       try {
         positions = findTextInStreams(pdfDoc, [...replacements.keys()]);
         console.log(`[export] found ${positions.size}/${replacements.size} positions`);
+        // Log which replacements were NOT found
+        for (const [oldVal] of replacements) {
+          if (!positions.has(oldVal)) {
+            console.log(`[export] NOT FOUND in PDF: "${oldVal.slice(0, 60)}"`);
+          }
+        }
       } catch (err) {
         console.error("[export] text search failed:", err);
         positions = new Map();
@@ -352,14 +382,16 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
 
         const page = pdfDoc.getPage(pos.pageIndex);
         const fontSize = Math.max(7, Math.min(Math.round(pos.height * 0.85), 14));
-        const newTextWidth = font.widthOfTextAtSize(newVal, fontSize);
-        const coverWidth = Math.max(pos.width, newTextWidth) + 6;
+
+        // Cover only the old text width — don't extend beyond it
+        const oldTextWidth = font.widthOfTextAtSize(oldVal, fontSize);
+        const coverWidth = Math.max(pos.width, oldTextWidth) + 2;
 
         page.drawRectangle({
-          x: pos.x - 1,
-          y: pos.y - 2,
+          x: pos.x - 0.5,
+          y: pos.y - 1,
           width: coverWidth,
-          height: pos.height + 4,
+          height: pos.height + 2,
           color: rgb(1, 1, 1),
         });
 
