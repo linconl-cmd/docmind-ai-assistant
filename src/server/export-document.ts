@@ -365,34 +365,52 @@ function findAllTextPositions(
       });
     };
 
-    // Check each item and line for ALL occurrences
-    const foundYs = new Set<number>();
+    // Check each item for ALL occurrences (no Y dedup — same line can have multiple)
+    const foundPositions = new Set<string>();
 
     // Single-item matches
     for (const item of items) {
       if (item.text.includes(searchText) || normalizeWS(item.text).includes(normSearch)) {
-        if (!foundYs.has(Math.round(item.y))) {
+        const key = `${Math.round(item.x)},${Math.round(item.y)}`;
+        if (!foundPositions.has(key)) {
           record(item, searchText.length);
-          foundYs.add(Math.round(item.y));
+          foundPositions.add(key);
         }
       }
     }
 
-    // Line-level matches
-    for (const [yKey, line] of lineMap) {
-      if (foundYs.has(yKey)) continue;
+    // Line-level matches (for fragmented text across TJ items)
+    for (const [, line] of lineMap) {
       const lineText = line.text;
       const normLine = normalizeWS(lineText);
-      if (lineText.includes(searchText) || normLine.includes(normSearch)) {
-        const idx = lineText.indexOf(searchText);
-        const useIdx = idx !== -1 ? idx : 0;
+
+      // Find ALL occurrences in this line, not just the first
+      let searchIn = lineText;
+      let searchOffset = 0;
+      while (true) {
+        let idx = searchIn.indexOf(searchText);
+        if (idx === -1) {
+          const normIdx = normalizeWS(searchIn).indexOf(normSearch);
+          if (normIdx === -1) break;
+          idx = normIdx;
+        }
+
+        // Find the item closest to this match
         let cc = 0;
         let mi = line.items[0];
         for (const it of line.items) {
-          if (cc + it.text.length > useIdx) { mi = it; break; }
+          if (cc + it.text.length > searchOffset + idx) { mi = it; break; }
           cc += it.text.length;
         }
-        record(mi, searchText.length);
+
+        const key = `${Math.round(mi.x)},${Math.round(mi.y)}`;
+        if (!foundPositions.has(key)) {
+          record(mi, searchText.length);
+          foundPositions.add(key);
+        }
+
+        searchIn = searchIn.substring(idx + searchText.length);
+        searchOffset += idx + searchText.length;
       }
     }
   }
