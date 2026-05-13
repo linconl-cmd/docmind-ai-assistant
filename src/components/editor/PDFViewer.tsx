@@ -131,8 +131,15 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
       });
 
       if (!result?.base64) {
-        show("Erro ao gerar PDF. Tente novamente.", "error");
+        const debugMsg = result?.debug ?? "";
+        show(`Erro ao gerar PDF. ${debugMsg}`, "error");
         return;
+      }
+
+      if (result.notFound && result.notFound.length > 0) {
+        const missed = result.notFound.slice(0, 3).join(", ");
+        const extra = result.notFound.length > 3 ? ` e mais ${result.notFound.length - 3}` : "";
+        show(`${result.notFound.length} campo(s) não localizado(s) no PDF: ${missed}${extra}`, "info");
       }
 
       const binary = atob(result.base64);
@@ -187,7 +194,7 @@ export function PDFViewer({ doc, flashedKeys, onSaveSections }: PDFViewerProps) 
               </Button>
             </>
           )}
-          {!dirty && doc.status === "ready" && (
+          {doc.status === "ready" && (
             <Button size="sm" variant="subtle" leftIcon={<Download className="h-4 w-4" />} onClick={handleDownload} loading={exporting} disabled={exporting}>
               {exporting ? "Gerando PDF…" : "Baixar PDF"}
             </Button>

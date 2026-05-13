@@ -1,6 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
-import { PDFDocument, PDFRawStream, PDFName, StandardFonts, rgb } from "pdf-lib";
-import { inflateSync } from "node:zlib";
+import {
+  PDFDocument, PDFRawStream, PDFName, PDFArray, PDFRef,
+  PDFNumber, StandardFonts, rgb,
+} from "pdf-lib";
+import { inflateSync, deflateSync } from "node:zlib";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import type { DocSection } from "@/types";
@@ -13,10 +16,15 @@ interface ExportRequest {
 interface ExportResponse {
   base64: string;
   filename: string;
-  method: "overlay" | "original";
+  method: "stream" | "overlay" | "original";
   replacedCount: number;
+  notFound: string[];
   debug?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Build replacement map: original sections vs edited sections
+// ---------------------------------------------------------------------------
 
 function buildReplacements(original: DocSection[], edited: DocSection[]): Map<string, string> {
   const map = new Map<string, string>();
@@ -43,12 +51,9 @@ function buildReplacements(original: DocSection[], edited: DocSection[]): Map<st
   return map;
 }
 
-interface TextItem {
-  text: string;
-  x: number;
-  y: number;
-  fontSize: number;
-}
+// ---------------------------------------------------------------------------
+// PDF string helpers
+// ---------------------------------------------------------------------------
 
 function decodePdfString(raw: string): string {
   if (!raw.startsWith("(") || !raw.endsWith(")")) return "";
@@ -61,6 +66,14 @@ function decodePdfString(raw: string): string {
     .replace(/\\\)/g, ")")
     .replace(/\\\\/g, "\\")
     .replace(/\\(\d{1,3})/g, (_, oct: string) => String.fromCharCode(parseInt(oct, 8)));
+}
+
+function escapePdfChars(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function extractStringsFromTJArray(raw: string): string {
@@ -82,12 +95,28 @@ function extractStringsFromTJArray(raw: string): string {
   return parts.join("");
 }
 
+function normalizeWS(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+// ---------------------------------------------------------------------------
+// Stream text parser
+// ---------------------------------------------------------------------------
+
+interface TextItem {
+  text: string;
+  x: number;
+  y: number;
+  fontSize: number;
+}
+
 function parseTextFromStream(streamBytes: Buffer): TextItem[] {
   const text = streamBytes.toString("latin1");
   const items: TextItem[] = [];
 
   let inText = false;
-  let fontSize = 12;
+  let fontSizeFromTf = 12;
+  let fontSizeFromTm = 0;
   let tmX = 0;
   let tmY = 0;
   const stack: string[] = [];
@@ -102,6 +131,7 @@ function parseTextFromStream(streamBytes: Buffer): TextItem[] {
       inText = true;
       tmX = 0;
       tmY = 0;
+      fontSizeFromTm = 0;
       stack.length = 0;
       continue;
     }
@@ -115,20 +145,25 @@ function parseTextFromStream(streamBytes: Buffer): TextItem[] {
       continue;
     }
 
+    const efs = () => fontSizeFromTm || fontSizeFromTf;
+
     switch (token) {
       case "Tf":
-        if (stack.length >= 2) fontSize = Math.abs(parseFloat(stack[stack.length - 1])) || 12;
+        if (stack.length >= 2) fontSizeFromTf = Math.abs(parseFloat(stack[stack.length - 1])) || 12;
         stack.length = 0;
         break;
-      case "Tm":
+      case "Tm": {
         if (stack.length >= 6) {
-          const d = parseFloat(stack[stack.length - 4]);
-          if (d && Math.abs(d) > 1) fontSize = Math.abs(d);
+          const a = Math.abs(parseFloat(stack[stack.length - 6]));
+          const d = Math.abs(parseFloat(stack[stack.length - 4]));
+          const scaleY = d || a;
+          if (scaleY > 1) fontSizeFromTm = scaleY;
           tmX = parseFloat(stack[stack.length - 2]) || 0;
           tmY = parseFloat(stack[stack.length - 1]) || 0;
         }
         stack.length = 0;
         break;
+      }
       case "Td":
       case "TD":
         if (stack.length >= 2) {
@@ -138,13 +173,13 @@ function parseTextFromStream(streamBytes: Buffer): TextItem[] {
         stack.length = 0;
         break;
       case "T*":
-        tmY -= fontSize * 1.2;
+        tmY -= efs() * 1.2;
         stack.length = 0;
         break;
       case "Tj": {
         if (stack.length >= 1) {
           const str = decodePdfString(stack[stack.length - 1]);
-          if (str.trim()) items.push({ text: str, x: tmX, y: tmY, fontSize });
+          if (str.trim()) items.push({ text: str, x: tmX, y: tmY, fontSize: efs() });
         }
         stack.length = 0;
         break;
@@ -152,16 +187,16 @@ function parseTextFromStream(streamBytes: Buffer): TextItem[] {
       case "TJ": {
         if (stack.length >= 1) {
           const str = extractStringsFromTJArray(stack[stack.length - 1]);
-          if (str.trim()) items.push({ text: str, x: tmX, y: tmY, fontSize });
+          if (str.trim()) items.push({ text: str, x: tmX, y: tmY, fontSize: efs() });
         }
         stack.length = 0;
         break;
       }
       case "'": {
-        tmY -= fontSize * 1.2;
+        tmY -= efs() * 1.2;
         if (stack.length >= 1) {
           const str = decodePdfString(stack[stack.length - 1]);
-          if (str.trim()) items.push({ text: str, x: tmX, y: tmY, fontSize });
+          if (str.trim()) items.push({ text: str, x: tmX, y: tmY, fontSize: efs() });
         }
         stack.length = 0;
         break;
@@ -175,32 +210,26 @@ function parseTextFromStream(streamBytes: Buffer): TextItem[] {
   return items;
 }
 
-interface FoundText {
-  pageIndex: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+// ---------------------------------------------------------------------------
+// Stream reference — tracks mutable state for in-place replacement
+// ---------------------------------------------------------------------------
+
+interface StreamRef {
+  pdfRef: PDFRef;
+  obj: PDFRawStream;
+  bytes: Buffer;
+  compressed: boolean;
+  dirty: boolean;
 }
 
-function findTextInStreams(
-  pdfDoc: PDFDocument,
-  searchTexts: string[],
-): Map<string, FoundText> {
-  const results = new Map<string, FoundText>();
-  const remaining = new Set(searchTexts);
-
-  // Collect all content streams with their decompressed bytes
-  const streams: Array<{ obj: PDFRawStream; bytes: Buffer; refStr: string }> = [];
-
+function collectStreams(pdfDoc: PDFDocument): StreamRef[] {
+  const streams: StreamRef[] = [];
   for (const [ref, obj] of pdfDoc.context.enumerateIndirectObjects()) {
     if (!(obj instanceof PDFRawStream)) continue;
-    const dict = obj.dict;
-    const filter = dict.get(PDFName.of("Filter"));
+    const filter = obj.dict.get(PDFName.of("Filter"));
     const filterStr = filter?.toString() ?? "";
     const isFlate = filterStr.includes("FlateDecode");
-    const noFilter = !filter;
-    if (!isFlate && !noFilter) continue;
+    if (!isFlate && filter) continue;
 
     let decompressed: Buffer;
     try {
@@ -212,46 +241,110 @@ function findTextInStreams(
     }
 
     if (!decompressed.toString("latin1").includes("BT")) continue;
-    streams.push({ obj, bytes: decompressed, refStr: ref.toString() });
+    streams.push({
+      pdfRef: ref as PDFRef,
+      obj,
+      bytes: decompressed,
+      compressed: isFlate,
+      dirty: false,
+    });
   }
+  return streams;
+}
 
-  // Build page → ref mapping once
-  const pageRefMap = new Map<string, number>();
+// ---------------------------------------------------------------------------
+// Page ref mapping (handles Contents arrays)
+// ---------------------------------------------------------------------------
+
+function collectPageRefs(pdfDoc: PDFDocument): Map<string, number> {
+  const map = new Map<string, number>();
   for (let pi = 0; pi < pdfDoc.getPageCount(); pi++) {
     const page = pdfDoc.getPage(pi);
-    const contentsRef = page.node.get(PDFName.of("Contents"));
-    if (contentsRef) {
-      const refStr = contentsRef.toString();
-      // Store the ref string for this page
-      pageRefMap.set(refStr, pi);
+    const raw = page.node.get(PDFName.of("Contents"));
+    if (!raw) continue;
+    if (raw instanceof PDFArray) {
+      for (let i = 0; i < raw.size(); i++) {
+        const item = raw.get(i);
+        if (item instanceof PDFRef) map.set(item.toString(), pi);
+      }
+    } else if (raw instanceof PDFRef) {
+      map.set(raw.toString(), pi);
+    } else {
+      map.set(raw.toString(), pi);
     }
   }
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// Direct stream replacement — replaces ALL occurrences across ALL streams
+// ---------------------------------------------------------------------------
+
+function tryStreamReplaceAll(
+  streams: StreamRef[],
+  oldText: string,
+  newText: string,
+): number {
+  const escOld = escapePdfChars(oldText);
+  const escNew = escapePdfChars(newText);
+
+  // Regex with number boundaries to avoid corrupting partial matches
+  // e.g. "6.000,00" must NOT match inside "16.000,00"
+  const pattern = new RegExp(
+    `(?<![0-9])${escapeRegex(escOld)}(?![0-9])`,
+    "g",
+  );
+
+  let totalCount = 0;
 
   for (const stream of streams) {
-    if (remaining.size === 0) break;
+    const content = stream.bytes.toString("latin1");
+    const matches = content.match(pattern);
+    if (!matches || matches.length === 0) continue;
 
+    const modified = content.replace(pattern, escNew);
+    stream.bytes = Buffer.from(modified, "latin1");
+    stream.dirty = true;
+    totalCount += matches.length;
+  }
+
+  return totalCount;
+}
+
+// ---------------------------------------------------------------------------
+// Find text positions for overlay fallback (finds ALL occurrences)
+// ---------------------------------------------------------------------------
+
+interface FoundText {
+  pageIndex: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+}
+
+function findAllTextPositions(
+  streams: StreamRef[],
+  pageRefMap: Map<string, number>,
+  searchText: string,
+): FoundText[] {
+  const results: FoundText[] = [];
+  const normSearch = normalizeWS(searchText);
+
+  for (const stream of streams) {
     const items = parseTextFromStream(stream.bytes);
     if (items.length === 0) continue;
 
-    // Find page index for this stream
-    let pageIndex = 0;
-    for (const [refStr, pi] of pageRefMap) {
-      if (refStr.includes(stream.refStr)) {
-        pageIndex = pi;
-        break;
-      }
-    }
+    const pageIndex = pageRefMap.get(stream.pdfRef.toString()) ?? 0;
 
-    // Build full line text for this stream (group by Y position)
+    // Group by Y into lines (tolerance ±3 units)
     const lineMap = new Map<number, { items: TextItem[]; text: string }>();
     for (const item of items) {
       const yKey = Math.round(item.y);
-      let line = lineMap.get(yKey);
-      if (!line) {
-        // Check nearby Y values (within 2 units)
-        for (const [k, v] of lineMap) {
-          if (Math.abs(k - yKey) <= 2) { line = v; break; }
-        }
+      let line: { items: TextItem[]; text: string } | undefined;
+      for (const [k, v] of lineMap) {
+        if (Math.abs(k - yKey) <= 3) { line = v; break; }
       }
       if (!line) {
         line = { items: [], text: "" };
@@ -261,54 +354,70 @@ function findTextInStreams(
       line.text += item.text;
     }
 
-    for (const searchText of [...remaining]) {
-      // Single item match
-      for (const item of items) {
-        if (item.text.includes(searchText)) {
-          results.set(searchText, {
-            pageIndex,
-            x: item.x,
-            y: item.y,
-            width: searchText.length * item.fontSize * 0.52,
-            height: item.fontSize,
-          });
-          remaining.delete(searchText);
-          break;
+    const record = (item: TextItem, matchLen: number) => {
+      results.push({
+        pageIndex,
+        x: item.x,
+        y: item.y,
+        width: matchLen * item.fontSize * 0.52,
+        height: item.fontSize,
+        fontSize: item.fontSize,
+      });
+    };
+
+    // Check each item and line for ALL occurrences
+    const foundYs = new Set<number>();
+
+    // Single-item matches
+    for (const item of items) {
+      if (item.text.includes(searchText) || normalizeWS(item.text).includes(normSearch)) {
+        if (!foundYs.has(Math.round(item.y))) {
+          record(item, searchText.length);
+          foundYs.add(Math.round(item.y));
         }
       }
-      if (!remaining.has(searchText)) continue;
+    }
 
-      // Line-level match (handles fragmented text like "R$" + " " + "1.000,00")
-      for (const [, line] of lineMap) {
-        const idx = line.text.indexOf(searchText);
-        if (idx === -1) continue;
-
-        // Find the item closest to where the match starts
-        let charCount = 0;
-        let matchItem = line.items[0];
-        for (const item of line.items) {
-          if (charCount + item.text.length > idx) {
-            matchItem = item;
-            break;
-          }
-          charCount += item.text.length;
+    // Line-level matches
+    for (const [yKey, line] of lineMap) {
+      if (foundYs.has(yKey)) continue;
+      const lineText = line.text;
+      const normLine = normalizeWS(lineText);
+      if (lineText.includes(searchText) || normLine.includes(normSearch)) {
+        const idx = lineText.indexOf(searchText);
+        const useIdx = idx !== -1 ? idx : 0;
+        let cc = 0;
+        let mi = line.items[0];
+        for (const it of line.items) {
+          if (cc + it.text.length > useIdx) { mi = it; break; }
+          cc += it.text.length;
         }
-
-        results.set(searchText, {
-          pageIndex,
-          x: matchItem.x,
-          y: matchItem.y,
-          width: searchText.length * matchItem.fontSize * 0.52,
-          height: matchItem.fontSize,
-        });
-        remaining.delete(searchText);
-        break;
+        record(mi, searchText.length);
       }
     }
   }
 
   return results;
 }
+
+// ---------------------------------------------------------------------------
+// Flush modified streams back into the PDF document
+// ---------------------------------------------------------------------------
+
+function flushStreams(pdfDoc: PDFDocument, streams: StreamRef[]) {
+  for (const s of streams) {
+    if (!s.dirty) continue;
+    const finalBytes = s.compressed ? deflateSync(s.bytes) : s.bytes;
+    const newContents = new Uint8Array(finalBytes);
+    s.obj.dict.set(PDFName.of("Length"), PDFNumber.of(newContents.length));
+    const newStream = PDFRawStream.of(s.obj.dict, newContents);
+    pdfDoc.context.assign(s.pdfRef, newStream);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Export endpoint
+// ---------------------------------------------------------------------------
 
 export const exportDocumentFn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -340,9 +449,7 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
 
       let originalSections: DocSection[] = [];
       if (doc.claude_context) {
-        try {
-          originalSections = JSON.parse(doc.claude_context);
-        } catch {}
+        try { originalSections = JSON.parse(doc.claude_context); } catch {}
       }
 
       const replacements = buildReplacements(originalSections, data.sections);
@@ -354,66 +461,87 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
           filename: exportName,
           method: "original",
           replacedCount: 0,
+          notFound: [],
         };
       }
 
       const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+      const streams = collectStreams(pdfDoc);
+      const pageRefMap = collectPageRefs(pdfDoc);
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-      let positions: Map<string, FoundText>;
-      try {
-        positions = findTextInStreams(pdfDoc, [...replacements.keys()]);
-        console.log(`[export] found ${positions.size}/${replacements.size} positions`);
-        // Log which replacements were NOT found
-        for (const [oldVal] of replacements) {
-          if (!positions.has(oldVal)) {
-            console.log(`[export] NOT FOUND in PDF: "${oldVal.slice(0, 60)}"`);
-          }
-        }
-      } catch (err) {
-        console.error("[export] text search failed:", err);
-        positions = new Map();
-      }
+      const notFound: string[] = [];
+      let countStream = 0;
+      let countOverlay = 0;
+      const streamFailed: Array<[string, string]> = [];
 
-      let count = 0;
+      // ---- Phase 1: direct stream replacement (all occurrences) ----
       for (const [oldVal, newVal] of replacements) {
-        const pos = positions.get(oldVal);
-        if (!pos) continue;
-
-        const page = pdfDoc.getPage(pos.pageIndex);
-        const fontSize = Math.max(7, Math.min(Math.round(pos.height * 0.85), 14));
-
-        // Cover only the old text width — don't extend beyond it
-        const oldTextWidth = font.widthOfTextAtSize(oldVal, fontSize);
-        const coverWidth = Math.max(pos.width, oldTextWidth) + 2;
-
-        page.drawRectangle({
-          x: pos.x - 0.5,
-          y: pos.y - 1,
-          width: coverWidth,
-          height: pos.height + 2,
-          color: rgb(1, 1, 1),
-        });
-
-        page.drawText(newVal, {
-          x: pos.x,
-          y: pos.y,
-          size: fontSize,
-          font,
-          color: rgb(0, 0, 0),
-        });
-
-        count++;
+        const n = tryStreamReplaceAll(streams, oldVal, newVal);
+        if (n > 0) {
+          countStream += n;
+          console.log(`[export] stream-replaced "${oldVal.slice(0, 40)}" → "${newVal.slice(0, 40)}" (${n}x)`);
+        } else {
+          streamFailed.push([oldVal, newVal]);
+        }
       }
+
+      // ---- Phase 2: overlay fallback for texts not found in streams ----
+      for (const [oldVal, newVal] of streamFailed) {
+        const positions = findAllTextPositions(streams, pageRefMap, oldVal);
+        if (positions.length === 0) {
+          notFound.push(oldVal.length > 50 ? oldVal.slice(0, 47) + "..." : oldVal);
+          console.log(`[export] NOT FOUND: "${oldVal.slice(0, 80)}"`);
+          continue;
+        }
+
+        for (const pos of positions) {
+          const page = pdfDoc.getPage(pos.pageIndex);
+          const fs = Math.max(6, Math.min(pos.fontSize, 20));
+
+          const oldW = font.widthOfTextAtSize(oldVal, fs);
+          let drawFs = fs;
+          const newW = font.widthOfTextAtSize(newVal, drawFs);
+          if (newW > oldW && oldW > 0) {
+            const shrunk = Math.floor(fs * (oldW / newW));
+            if (shrunk >= 5) drawFs = shrunk;
+          }
+
+          const coverW = Math.max(pos.width, oldW) + 2;
+
+          page.drawRectangle({
+            x: pos.x - 0.5,
+            y: pos.y - pos.fontSize * 0.15,
+            width: coverW,
+            height: pos.fontSize * 0.95,
+            color: rgb(1, 1, 1),
+          });
+
+          page.drawText(newVal, {
+            x: pos.x,
+            y: pos.y,
+            size: drawFs,
+            font,
+            color: rgb(0, 0, 0),
+          });
+
+          countOverlay++;
+        }
+      }
+
+      // ---- Phase 3: flush modified streams ----
+      flushStreams(pdfDoc, streams);
 
       const resultBytes = Buffer.from(await pdfDoc.save());
+      const total = countStream + countOverlay;
 
       return {
         base64: resultBytes.toString("base64"),
         filename: exportName,
-        method: "overlay",
-        replacedCount: count,
-        debug: `found=${positions.size}|applied=${count}|total=${replacements.size}`,
+        method: countStream > 0 ? "stream" : "overlay",
+        replacedCount: total,
+        notFound,
+        debug: `stream=${countStream}|overlay=${countOverlay}|notFound=${notFound.length}|total=${replacements.size}`,
       };
     } catch (err) {
       console.error("[export] fatal error:", err);
@@ -422,6 +550,7 @@ export const exportDocumentFn = createServerFn({ method: "POST" })
         filename: exportName,
         method: "original",
         replacedCount: 0,
+        notFound: [],
         debug: `error: ${err instanceof Error ? err.message : "unknown"}`,
       };
     }
